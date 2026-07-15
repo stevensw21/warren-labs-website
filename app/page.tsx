@@ -15,7 +15,7 @@ import { useState } from "react";
 const navItems = ["Home", "Projects", "Tools", "Articles", "About", "Contact"];
 
 const projects = [
-  { title: "Scuba Map Maker", description: "A working surface for documenting dive sites, underwater features, and field observations.", status: "In development", icon: Map, art: "topography" },
+  { title: "Scuba Map Maker", description: "A working surface for documenting dive sites, underwater features, and field observations.", status: "Available now", icon: Map, art: "topography" },
 ];
 
 const articles = [
