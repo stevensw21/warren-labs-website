@@ -140,16 +140,16 @@ input[type="range"] { width: 100%; accent-color: #2a7781; }
 @media print { .map-stage.has-print-area { background: var(--water); height: 500px !important; margin: 0 auto; overflow: hidden !important; width: 1000px !important; }.map-stage.has-print-area .map-canvas { transform: translate(var(--print-offset-x), var(--print-offset-y)) scale(var(--print-crop-scale)) !important; }.map-stage.has-print-area .map-furniture { display: none !important; }.map-stage.has-print-area .print-crop-furniture { display: block; inset: 0; position: absolute; z-index: 30; }.print-crop-furniture .north-arrow { right: 36px; top: 32px; }.print-crop-furniture .scale-bar { bottom: 30px; left: 36px; }.print-crop-furniture .scale-bar i { width: var(--print-scale-bar) !important; }.print-crop-furniture .map-units { bottom: 32px; right: 36px; } }
 
 /* Rounded, continuous map strokes */
-.soundings-app .shoreline-path { height: 100%; left: 0; pointer-events: none; position: absolute; top: 0; width: 100%; z-index: 3; }
-.soundings-app .shoreline-path path { fill: none; stroke-linecap: round; stroke-linejoin: round; }
-.soundings-app .shoreline-base { stroke: #d2c093; stroke-width: 8px; }
-.soundings-app .shoreline-edge { stroke: #867750; stroke-width: 2px; }
-.soundings-app .vector-line { background: transparent; border: 0; cursor: pointer; height: var(--route-hit-height, 14px); margin-top: var(--route-hit-offset, -6px); padding: 0; position: absolute; transform-origin: left center; z-index: 6; }
-.soundings-app .vector-line::before, .soundings-app .vector-line::after { display: none; }
-.soundings-app .vector-line svg { display: block; height: 14px; overflow: visible; width: 100%; }
-.soundings-app .vector-line line { stroke: #174b5c; stroke-linecap: round; stroke-width: 2px; }
-.soundings-app .vector-line path { fill: #174b5c; stroke-linejoin: round; }
-.soundings-app .vector-line.selected-vector line { stroke: #d8613c; stroke-width: 3px; }
-.soundings-app .vector-line.selected-vector path { fill: #d8613c; }
-@media print { .soundings-app .shoreline-base { stroke-width: 8px !important; }.soundings-app .shoreline-edge { stroke-width: 2px !important; }.soundings-app .vector-line line { stroke: #174b5c !important; stroke-width: 2px !important; }.soundings-app .vector-line path { display: none !important; } }
+.shoreline-path { height: 100%; left: 0; pointer-events: none; position: absolute; top: 0; width: 100%; z-index: 3; }
+.shoreline-path path { fill: none; stroke-linecap: round; stroke-linejoin: round; }
+.shoreline-base { stroke: #d2c093; stroke-width: 8px; }
+.shoreline-edge { stroke: #867750; stroke-width: 2px; }
+.vector-line { background: transparent; border: 0; cursor: pointer; height: var(--route-hit-height, 14px); margin-top: var(--route-hit-offset, -6px); padding: 0; position: absolute; transform-origin: left center; z-index: 6; }
+.vector-line::before, .vector-line::after { display: none; }
+.vector-line svg { display: block; height: 14px; overflow: visible; width: 100%; }
+.vector-line line { stroke: #174b5c; stroke-linecap: round; stroke-width: 2px; }
+.vector-line path { fill: #174b5c; stroke-linejoin: round; }
+.vector-line.selected-vector line { stroke: #d8613c; stroke-width: 3px; }
+.vector-line.selected-vector path { fill: #d8613c; }
+@media print { .shoreline-base { stroke-width: 8px !important; }.shoreline-edge { stroke-width: 2px !important; }.vector-line line { stroke: #174b5c !important; stroke-width: 2px !important; }.vector-line path { display: none !important; } }
 }
