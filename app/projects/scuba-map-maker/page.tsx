@@ -921,7 +921,7 @@ export default function ScubaMapMaker() {
             </>}
           </aside>}
 
-          {activePanel === "points" && <section className="points-sheet print-hidden"><PanelHeading icon="table" title="Points" onClose={() => setActivePanel(null)}/><div className="points-sheet-body">{pointLedger}</div></section>}
+          {activePanel === "points" && <section className="points-sheet print-hidden" onWheel={(event) => event.stopPropagation()}><PanelHeading icon="table" title="Points" onClose={() => setActivePanel(null)}/><div className="points-sheet-body">{pointLedger}</div></section>}
 
           {visibleLayers.mapFurniture && <><div className="screen-north print-hidden"><b>N</b><svg viewBox="0 0 34 56" aria-hidden="true"><path d="M17 2 31 46 17 39 3 46 17 2Z"/><path d="m17 2 14 44-14-7V2Z"/></svg></div><div className="screen-scale print-hidden"><div className="scale-labels"><span>0</span><span>{formatNumber(mapBar.value / 2)}</span><span>{formatNumber(mapBar.value)} {project.distanceUnit}</span></div><i/></div></>}
           <div className="zoom-controls print-hidden"><button aria-label="Zoom out" onClick={() => setZoom((value) => Math.max(0.1, value / 1.25))}>−</button><span>{Math.round(zoom * 100)}%</span><button aria-label="Zoom in" onClick={() => setZoom((value) => value * 1.25)}>＋</button><button className="recenter-button" aria-label="Recenter map" onClick={() => { setPan({ x: 22, y: 24 }); setZoom(0.78); }}><SoundingsIcon name="origin"/></button></div>
