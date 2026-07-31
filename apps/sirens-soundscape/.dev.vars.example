@@ -1,0 +1,6 @@
+# Local-only authentication bypass. Never set this value in production.
+LOCAL_AUTH_BYPASS=true
+
+# Optional stable values for local fixtures.
+SOUNDSCAPE_OWNER_ID=local-development-owner
+ACCESS_ALLOWED_EMAIL=local-owner@sirens-soundscape.invalid

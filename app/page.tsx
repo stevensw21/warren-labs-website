@@ -16,8 +16,8 @@ import { useState } from "react";
 const navItems = ["Home", "Projects", "Tools", "Articles", "About", "Contact"];
 
 const projects = [
-  { title: "Scuba Map Maker", description: "A working surface for documenting dive sites, underwater features, and field observations.", status: "Available now", icon: Map, art: "topography", href: "/projects/scuba-map-maker" },
-  { title: "Siren’s Soundscape", description: "A private GM soundboard for layering YouTube playlists, ambient audio, and one-shot effects during tabletop sessions.", status: "Available now", icon: AudioLines, art: "soundscape", href: "https://soundscape.warren-labs.com" },
+  { title: "Scuba Map Maker", description: "A working surface for documenting dive sites, underwater features, and field observations.", status: "Available now", icon: Map, art: "topography", href: "/projects/scuba-map-maker", githubHref: "https://github.com/stevensw21/warren-labs-website/tree/main/app/projects/scuba-map-maker" },
+  { title: "Siren’s Soundscape", description: "A private GM soundboard for layering YouTube playlists, ambient audio, and one-shot effects during tabletop sessions.", status: "Available now", icon: AudioLines, art: "soundscape", href: "https://soundscape.warren-labs.com", githubHref: "https://github.com/stevensw21/warren-labs-website/tree/main/apps/sirens-soundscape" },
 ];
 
 const articles = [
@@ -97,7 +97,7 @@ export default function Home() {
                   <div className="project-bottom">
                     <span>{project.status}</span>
                     <div className="project-links">
-                      <a href="https://github.com" target="_blank" rel="noreferrer"><Github size={15} /> GitHub <ArrowUpRight size={15} /></a>
+                      <a href={project.githubHref} target="_blank" rel="noreferrer"><Github size={15} /> GitHub <ArrowUpRight size={15} /></a>
                       <a href={project.href}>Open project <ArrowUpRight size={15} /></a>
                     </div>
                   </div>
@@ -132,7 +132,7 @@ export default function Home() {
         <div className="footer-rule"><span /></div>
         <div className="footer-grid">
           <div><h2>Warren Labs</h2><p>Building practical tools for science, engineering, diving, and AI.</p></div>
-          <div className="footer-links"><a href="https://github.com" target="_blank" rel="noreferrer">GitHub</a><a href="#contact">LinkedIn</a><a href="mailto:hello@warren-labs.com">Email</a></div>
+          <div className="footer-links"><a href="https://github.com/stevensw21" target="_blank" rel="noreferrer">GitHub</a><a href="#contact">LinkedIn</a><a href="mailto:hello@warren-labs.com">Email</a></div>
         </div>
         <p className="copyright">© 2026 Warren Labs</p>
       </footer>

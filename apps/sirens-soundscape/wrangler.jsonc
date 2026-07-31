@@ -1,0 +1,38 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "sirens-soundscape",
+  "account_id": "5d816d3f576131e35036b892ff745970",
+  "main": "./worker/index.ts",
+  "compatibility_date": "2026-07-31",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [
+    {
+      "pattern": "soundscape.warren-labs.com",
+      "custom_domain": true
+    }
+  ],
+  "assets": {
+    "directory": "dist/client",
+    "not_found_handling": "none",
+    "binding": "ASSETS"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "sirens-soundscape-db",
+      "database_id": "5123b926-6363-46f6-b4ea-ee65c2af5746",
+      "migrations_dir": "drizzle"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "AUDIO",
+      "bucket_name": "sirens-soundscape-audio"
+    }
+  ],
+  "observability": {
+    "enabled": true
+  }
+}
