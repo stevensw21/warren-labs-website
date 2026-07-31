@@ -47,6 +47,11 @@ h2 { font-size:clamp(34px, 4.1vw, 59px); letter-spacing:-.065em; line-height:1; 
 .claw .art-line { border-radius:3px; transform:rotate(-28deg); }
 .dive .line-one, .signal .line-one { border-width:0 0 2px; border-radius:0; transform:rotate(0); top:57%; }
 .hex .art-grid { background-image:radial-gradient(circle at center, #80a9a245 1px, transparent 2px); background-size:19px 19px; }
+.soundscape { background:#11161a; color:#eef2f1; }
+.soundscape .art-grid { background-image:linear-gradient(#40515c33 1px, transparent 1px), linear-gradient(90deg,#40515c33 1px, transparent 1px); background-size:32px 32px; }
+.soundscape .line-one { border-color:#c87532; }
+.soundscape .line-two { border-color:#8ea865; }
+.soundscape .line-three { border-color:#40515c; }
 .project-body { display:flex; flex-direction:column; justify-content:space-between; min-width:0; }
 .project h3 { font-size:clamp(20px, 1.8vw, 27px); letter-spacing:-.055em; line-height:1.05; }
 .project-body > div > p { margin-top:15px; color:#555d61; font-size:13px; line-height:1.55; }

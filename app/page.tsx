@@ -5,6 +5,7 @@ import {
   ArrowDownRight,
   ArrowRight,
   ArrowUpRight,
+  AudioLines,
   Github,
   Map,
   Menu,
@@ -15,7 +16,8 @@ import { useState } from "react";
 const navItems = ["Home", "Projects", "Tools", "Articles", "About", "Contact"];
 
 const projects = [
-  { title: "Scuba Map Maker", description: "A working surface for documenting dive sites, underwater features, and field observations.", status: "Available now", icon: Map, art: "topography" },
+  { title: "Scuba Map Maker", description: "A working surface for documenting dive sites, underwater features, and field observations.", status: "Available now", icon: Map, art: "topography", href: "/projects/scuba-map-maker" },
+  { title: "Siren’s Soundscape", description: "A private GM soundboard for layering YouTube playlists, ambient audio, and one-shot effects during tabletop sessions.", status: "Available now", icon: AudioLines, art: "soundscape", href: "https://soundscape.warren-labs.com" },
 ];
 
 const articles = [
@@ -79,7 +81,7 @@ export default function Home() {
       <section className="projects-section" id="projects" aria-labelledby="projects-title">
         <div className="section-intro">
           <h2 id="projects-title">Featured Projects</h2>
-          <p>The first active Warren Labs project.</p>
+          <p>Practical tools built and maintained at Warren Labs.</p>
         </div>
         <div className="project-list">
           {projects.map((project) => {
@@ -96,7 +98,7 @@ export default function Home() {
                     <span>{project.status}</span>
                     <div className="project-links">
                       <a href="https://github.com" target="_blank" rel="noreferrer"><Github size={15} /> GitHub <ArrowUpRight size={15} /></a>
-                      <a href="/projects/scuba-map-maker">Open project <ArrowUpRight size={15} /></a>
+                      <a href={project.href}>Open project <ArrowUpRight size={15} /></a>
                     </div>
                   </div>
                 </div>
