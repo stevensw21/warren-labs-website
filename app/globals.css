@@ -187,9 +187,11 @@ svg { display: block; }
 .waypoint { position: absolute; z-index: 9; display: grid; place-items: center; min-width: var(--point-hit-size, 44px); min-height: var(--point-hit-size, 44px); padding: 0; border: 0; border-radius: 50%; background: transparent; transform: translate(-50%, -50%); }
 .waypoint:focus-visible { outline: none; }
 .point-dot { display: block; width: var(--point-dot-size, 14px); height: var(--point-dot-size, 14px); border: 0; border-radius: 50%; background: var(--map-ink); box-shadow: inset 0 0 0 var(--point-dot-border, 2px) #efffff, 0 0 0 var(--point-ring, 1px) var(--map-ink), 0 var(--point-shadow, 1px) var(--point-shadow-blur, 4px) rgba(0,0,0,.2); transition: transform 160ms ease, background 160ms ease, box-shadow 160ms ease; }
+.point-symbol-marker { display: block; width: var(--point-symbol-size, 38px); height: auto; object-fit: contain; opacity: .92; filter: drop-shadow(0 var(--point-shadow, 1px) var(--point-shadow-blur, 4px) rgba(0,0,0,.18)); mix-blend-mode: multiply; pointer-events: none; transition: transform 160ms ease, filter 160ms ease, opacity 160ms ease; }
 .waypoint.origin .point-dot { background: var(--coral); box-shadow: inset 0 0 0 var(--point-dot-border, 2px) #efffff, 0 0 0 var(--point-origin-ring, 2px) rgba(255,255,255,.9), 0 0 0 calc(var(--point-origin-ring, 2px) + var(--point-ring, 1px)) var(--coral); }
 .waypoint.selected .point-dot { background: var(--coral); transform: scale(1.15); box-shadow: inset 0 0 0 var(--point-dot-border, 2px) #efffff, 0 0 0 var(--point-origin-ring, 2px) rgba(255,255,255,.9), 0 0 0 calc(var(--point-origin-ring, 2px) + var(--point-selected-ring, 3px)) rgba(255,103,85,.6); }
 .named-point:focus-visible .point-dot { box-shadow: inset 0 0 0 var(--point-dot-border, 2px) #efffff, 0 0 0 var(--point-origin-ring, 2px) rgba(255,255,255,.9), 0 0 0 calc(var(--point-origin-ring, 2px) + var(--point-selected-ring, 3px)) rgba(255,103,85,.6); }
+.waypoint.selected .point-symbol-marker, .waypoint:focus-visible .point-symbol-marker { opacity: 1; filter: drop-shadow(0 0 var(--point-selected-ring, 3px) rgba(255,103,85,.95)) drop-shadow(0 0 var(--point-origin-ring, 2px) white); transform: scale(1.08); }
 .junction-handle { width: var(--junction-size, 10px); height: var(--junction-size, 10px); border: 0; border-radius: 50%; background: rgba(255,255,255,.88); opacity: 0; transform: scale(.55); box-shadow: inset 0 0 0 var(--junction-border, 2px) var(--coral); transition: opacity 140ms ease, transform 140ms ease, box-shadow 140ms ease; pointer-events: none; }
 .junction-point:hover .junction-handle, .junction-point:focus-visible .junction-handle, .junction-point.selected .junction-handle { opacity: 1; transform: scale(1); box-shadow: inset 0 0 0 var(--junction-border, 2px) var(--coral), 0 0 0 var(--junction-halo, 4px) rgba(255,103,85,.26); }
 .point-annotation { position: relative; display: flex; align-items: center; min-width: var(--annotation-hit-width, 44px); min-height: var(--annotation-hit-height, 18px); padding: 0; border: 0; background: transparent; color: var(--map-ink); line-height: 1.1; white-space: nowrap; text-align: left; touch-action: none; user-select: none; cursor: grab; pointer-events: auto; }
@@ -250,6 +252,17 @@ svg { display: block; }
 .inspector-body input::placeholder, .drawer-body input::placeholder, .drawer-body textarea::placeholder { color: rgba(170,184,193,.54); }
 .inspector-body input:disabled, .point-ledger input:disabled { background: rgba(255,255,255,.04); color: var(--on-dark-muted); }
 .inspector-body .compact-field { max-width: 112px; }
+.point-symbol-picker { min-width: 0; margin: 0; padding: 0; border: 0; }
+.point-symbol-picker legend { margin-bottom: 7px; color: var(--on-dark-muted); font-size: 12px; font-weight: 550; }
+.point-symbol-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.point-symbol-options label { position: relative; display: grid; place-items: center; gap: 2px; min-width: 0; min-height: 58px; padding: 4px 3px; overflow: hidden; border: 1px solid rgba(209,231,238,.16); border-radius: 4px; background: rgba(255,255,255,.025); color: var(--on-dark-muted); cursor: pointer; }
+.point-symbol-options label:hover { border-color: rgba(209,231,238,.34); color: var(--on-dark); }
+.point-symbol-options label.active { border-color: var(--coral); background: rgba(255,103,85,.08); color: var(--on-dark); }
+.point-symbol-options label:focus-within { outline: 2px solid var(--coral); outline-offset: 1px; }
+.point-symbol-options input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+.point-symbol-options label > span:last-child { width: 100%; overflow: hidden; font-size: 8px; font-weight: 650; line-height: 1.1; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
+.point-symbol-option-image { width: 44px; height: 33px; object-fit: contain; filter: invert(1); opacity: .86; pointer-events: none; }
+.point-symbol-circle-preview { display: block; width: 14px; height: 14px; border-radius: 50%; background: currentColor; box-shadow: inset 0 0 0 2px rgba(239,255,255,.92), 0 0 0 1px currentColor; }
 .annotation-reset-section { display: grid; gap: 8px; padding: 11px 0; border-top: 1px solid var(--divider); border-bottom: 1px solid var(--divider); }
 .annotation-reset-heading, .annotation-reset-list > div { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .annotation-reset-heading > span { color: var(--on-dark); font-size: 12px; font-weight: 700; }
@@ -361,10 +374,13 @@ svg { display: block; }
 .point-ledger-heading p { max-width: 660px; margin: 0; color: var(--on-dark-muted); font-size: 11px; line-height: 1.45; }
 .point-ledger-heading .secondary-button { flex: 0 0 auto; }
 .table-scroll { overflow: auto; border: 1px solid var(--divider); border-radius: 4px; }
-.point-ledger table { width: 100%; min-width: 840px; border-collapse: collapse; font-size: 11px; }
+.point-ledger table { width: 100%; min-width: 1040px; border-collapse: collapse; font-size: 11px; }
 .point-ledger th { padding: 9px 8px; background: rgba(255,255,255,.05); color: var(--on-dark-muted); font-size: 9px; font-weight: 700; letter-spacing: .04em; text-align: left; }
 .point-ledger td { padding: 6px; border-top: 1px solid var(--divider); }
 .point-ledger input, .point-ledger select { min-height: 36px; padding: 7px 8px; font-size: 11px; }
+.point-symbol-cell { display: grid; grid-template-columns: 36px minmax(112px, 1fr); align-items: center; gap: 5px; }
+.point-symbol-cell > .point-symbol-circle-preview { justify-self: center; color: var(--on-dark); }
+.point-symbol-table-preview { width: 36px; height: 28px; object-fit: contain; filter: invert(1); opacity: .86; }
 .point-name-cell { display: grid; grid-template-columns: minmax(100px, 1fr) 36px; gap: 5px; }
 .delete-point { display: grid; place-items: center; width: 36px; min-height: 36px; padding: 0; border: 1px solid rgba(255,103,85,.24); border-radius: 4px; background: transparent; color: var(--danger); }
 .delete-point svg { width: 16px; height: 16px; }
@@ -497,6 +513,7 @@ svg { display: block; }
   .point-leaders { --point-leader-width: var(--print-point-leader-width) !important; }
   .point-leader { stroke: rgba(23,75,92,.68) !important; }
   .point-dot { background: #174b5c !important; border: 0 !important; box-shadow: none !important; height: var(--print-point-marker-size) !important; width: var(--print-point-marker-size) !important; }
+  .point-symbol-marker { width: var(--print-point-symbol-size) !important; height: auto !important; opacity: 1 !important; filter: none !important; mix-blend-mode: multiply !important; transform: none !important; }
   .junction-handle { display: none !important; }
   .waypoint.selected .point-dot { transform: none !important; }
   .point-annotation { min-width: 0 !important; min-height: 0 !important; cursor: default !important; }
@@ -526,6 +543,7 @@ svg { display: block; }
   .smart-callout-leaders { position: absolute; inset: 0; z-index: 24; width: 1000px; height: 500px; overflow: visible; pointer-events: none; }
   .smart-callout-leaders polyline { fill: none; stroke: rgba(23,75,92,.62); stroke-width: .85px; stroke-linecap: round; stroke-linejoin: round; }
   .smart-callout-anchor-marker { fill: #174b5c; stroke: none; }
+  .smart-callout-anchor-symbol { opacity: 1; }
   .smart-callout-labels { position: absolute; inset: 0; z-index: 25; width: 1000px; height: 500px; pointer-events: none; }
   .smart-callout-label { position: absolute; display: flex; flex-direction: column; justify-content: center; padding: 3px 4px; overflow: hidden; border: 0; border-radius: 3px; outline: .75px solid #c6d8d9; outline-offset: -.75px; background: rgba(253,252,247,.98); color: #174b5c; font-size: 10px; font-weight: 720; line-height: 12px; white-space: nowrap; box-shadow: none; text-shadow: none; }
   .map-stage.smart-callout-mode .print-crop-furniture { position: absolute; inset: 0; z-index: 30; display: block; pointer-events: none; }

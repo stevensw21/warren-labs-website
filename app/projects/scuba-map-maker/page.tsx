@@ -2,6 +2,7 @@
 
 import { CSSProperties, ChangeEvent, Fragment, KeyboardEvent as ReactKeyboardEvent, PointerEvent, WheelEvent, useEffect, useMemo, useRef, useState } from "react";
 import { SoundingsIcon, type SoundingsIconName } from "./soundings-icons";
+import { POINT_SYMBOLS, normalizePointSymbol, pointSymbolDefinition, type PointSymbolId } from "./point-symbols";
 import {
   POINT_ANNOTATION_KINDS,
   annotationPosition,
@@ -14,7 +15,7 @@ import { layoutPrintCallouts, type PrintRect } from "./print-callouts";
 import { buildRouteNetwork, type RoutePath } from "./route-network";
 
 type Unit = "ft" | "m" | "mi";
-type Point = { id: string; label: string; name?: string; x: number; y: number; depth?: number; labelOffsets?: PointLabelOffsets };
+type Point = { id: string; label: string; name?: string; symbol?: PointSymbolId; x: number; y: number; depth?: number; labelOffsets?: PointLabelOffsets };
 type Vector = { id: string; fromId: string; toId: string; bearing: number; distance: number; unit: Unit };
 type CoastPoint = { id: string; x: number; y: number };
 type PrintArea = { x: number; y: number; width: number; height: number };
@@ -142,7 +143,7 @@ function normalizeProject(raw: Project): Project {
   const savedReference = project.reference ?? ({} as Partial<ReferenceImage>);
   project.reference = { dataUrl: savedReference.dataUrl, opacity: savedReference.opacity ?? 0.48, scale: savedReference.scale ?? 1, x: savedReference.x ?? 0, y: savedReference.y ?? 0, visible: savedReference.visible ?? true, locked: savedReference.locked ?? false };
   project.waypoints = (project.waypoints ?? []).map((point) => {
-    return normalizePointAnnotationOffsets({ ...point, name: point.name ?? "" });
+    return normalizePointAnnotationOffsets({ ...point, name: point.name ?? "", symbol: normalizePointSymbol(point.symbol) });
   });
   project.vectors = (project.vectors ?? []).map((vector) => ({ ...vector, unit: METERS_PER_UNIT[vector.unit] ? vector.unit : project.distanceUnit }));
   project.shoreLocked = project.shoreLocked ?? false;
@@ -210,6 +211,29 @@ function DockButton({ active, disabled, icon, label, onClick }: { active?: boole
 
 function PanelHeading({ icon, title, onClose }: { icon?: SoundingsIconName; title: string; onClose: () => void }) {
   return <header className="panel-heading"><div>{icon && <SoundingsIcon name={icon}/>}<h2>{title}</h2></div><button className="close-button" aria-label={`Close ${title}`} onClick={onClose}><SoundingsIcon name="close"/></button></header>;
+}
+
+function PointSymbolImage({ symbol, className = "" }: { symbol: PointSymbolId; className?: string }) {
+  const definition = pointSymbolDefinition(symbol);
+  // These local, user-supplied map symbols must print at their original fidelity.
+  // eslint-disable-next-line @next/next/no-img-element
+  return <img className={className} src={definition.asset} alt="" aria-hidden="true" draggable={false}/>;
+}
+
+function PointSymbolPicker({ point, onChange }: { point: Point; onChange: (symbol?: PointSymbolId) => void }) {
+  return <fieldset className="point-symbol-picker">
+    <legend>Marker</legend>
+    <div className="point-symbol-options">
+      <label className={!point.symbol ? "active" : ""} title="Circle">
+        <input type="radio" name={`point-symbol-${point.id}`} value="" checked={!point.symbol} onChange={() => onChange()}/>
+        <span className="point-symbol-circle-preview" aria-hidden="true"/><span>Circle</span>
+      </label>
+      {POINT_SYMBOLS.map((symbol) => <label className={point.symbol === symbol.id ? "active" : ""} title={symbol.label} key={symbol.id}>
+        <input type="radio" name={`point-symbol-${point.id}`} value={symbol.id} checked={point.symbol === symbol.id} onChange={() => onChange(symbol.id)}/>
+        <PointSymbolImage className="point-symbol-option-image" symbol={symbol.id}/><span>{symbol.label}</span>
+      </label>)}
+    </div>
+  </fieldset>;
 }
 
 export default function ScubaMapMaker() {
@@ -321,6 +345,16 @@ export default function ScubaMapMaker() {
     syncChannel.current?.postMessage({ type: "project-update", source: windowId.current, project: next });
   };
   const mutate = (fn: (current: Project) => Project, record = true) => project && update(fn(clone(project)), record);
+  const setPointSymbol = (pointId: string, symbol?: PointSymbolId) => {
+    mutate((current) => {
+      const point = current.waypoints.find((item) => item.id === pointId);
+      if (!point) return current;
+      if (symbol) point.symbol = symbol;
+      else delete point.symbol;
+      return current;
+    });
+    setNotice(symbol ? `${pointSymbolDefinition(symbol).label} marker selected.` : "Circle marker selected.");
+  };
   const possibleNextPoints = (current: Project, fromId: string, vectorId?: string) => current.waypoints.filter((candidate) => {
     if (candidate.id === fromId) return false;
     return !current.vectors.some((vector) => vector.fromId === fromId && vector.toId === candidate.id && vector.id !== vectorId);
@@ -639,6 +673,7 @@ export default function ScubaMapMaker() {
     "--print-annotation-padding-y": `${1 / effectivePrintScale}px`,
     "--print-annotation-radius": `${2 / effectivePrintScale}px`,
     "--print-point-marker-size": `${4 / effectivePrintScale}px`,
+    "--print-point-symbol-size": `${24 / effectivePrintScale}px`,
   } as CSSProperties;
   const printCropStyle = printArea ? {
     "--print-crop-scale": String(printCropScale),
@@ -692,7 +727,7 @@ export default function ScubaMapMaker() {
   const routeControlStyle = { "--route-hit-height": `${routeHitHeight}px`, "--route-hit-offset": `${-routeHitHeight / 2}px`, "--route-label-border": `${1 / zoom}px`, "--route-label-radius": `${3 / zoom}px`, "--route-label-font": `${11 / zoom}px`, "--route-label-padding-y": `${2 / zoom}px`, "--route-label-padding-x": `${4 / zoom}px` } as CSSProperties;
   const routeNetworkStyle = { "--route-width": `${2 / zoom}px`, "--route-selected-width": `${3 / zoom}px`, "--route-chevron-width": `${2 / zoom}px`, "--route-branch-radius": `${1 / zoom}px`, "--print-route-width": `${2 / effectivePrintScale}px`, "--print-route-branch-radius": `${1 / effectivePrintScale}px` } as CSSProperties;
   const selectedDirectionPath = selectedRouteLine ? directionChevronPath(selectedRouteLine, zoom) : "";
-  const waypointDisplayStyle = { "--point-hit-size": `${44 / zoom}px`, "--point-dot-size": `${14 / zoom}px`, "--point-dot-border": `${2 / zoom}px`, "--point-ring": `${1 / zoom}px`, "--point-origin-ring": `${2 / zoom}px`, "--point-selected-ring": `${3 / zoom}px`, "--point-shadow": `${1 / zoom}px`, "--point-shadow-blur": `${4 / zoom}px`, "--junction-size": `${10 / zoom}px`, "--junction-border": `${2 / zoom}px`, "--junction-halo": `${4 / zoom}px` } as CSSProperties;
+  const waypointDisplayStyle = { "--point-hit-size": `${44 / zoom}px`, "--point-dot-size": `${14 / zoom}px`, "--point-dot-border": `${2 / zoom}px`, "--point-ring": `${1 / zoom}px`, "--point-origin-ring": `${2 / zoom}px`, "--point-selected-ring": `${3 / zoom}px`, "--point-shadow": `${1 / zoom}px`, "--point-shadow-blur": `${4 / zoom}px`, "--point-symbol-size": `${38 / zoom}px`, "--junction-size": `${10 / zoom}px`, "--junction-border": `${2 / zoom}px`, "--junction-halo": `${4 / zoom}px` } as CSSProperties;
   const printAreaDisplayStyle = { "--print-area-stroke": `${2 / zoom}px`, "--print-area-dash": `${8 / zoom}px`, "--print-area-dash-gap": `${6 / zoom}px`, "--print-area-label-top": `${-2 / zoom}px`, "--print-area-label-padding-y": `${4 / zoom}px`, "--print-area-label-padding-x": `${7 / zoom}px`, "--print-area-label-font": `${10 / zoom}px`, "--print-area-handle-size": `${14 / zoom}px`, "--print-area-handle-offset": `${-8 / zoom}px`, "--print-area-focus-width": `${2 / zoom}px`, "--print-area-focus-offset": `${2 / zoom}px` } as CSSProperties;
   const annotationDisplayStyle = { "--annotation-hit-width": `${44 / zoom}px`, "--annotation-hit-height": `${18 / zoom}px`, "--annotation-touch-hit": `${44 / zoom}px`, "--annotation-manual-hit": `${44 / zoom}px`, "--annotation-stack-x": `${28 / zoom}px`, "--annotation-padding-x": `${3 / zoom}px`, "--annotation-padding-y": `${1 / zoom}px`, "--annotation-radius": `${3 / zoom}px`, "--annotation-label-size": `${13 / zoom}px`, "--annotation-detail-size": `${10 / zoom}px`, "--annotation-focus-width": `${1.5 / zoom}px`, "--point-leader-width": `${1 / zoom}px`, "--print-point-leader-width": `${1 / effectivePrintScale}px` } as CSSProperties;
   const pointLedger = (
@@ -703,11 +738,12 @@ export default function ScubaMapMaker() {
       </div>
       <div className="table-scroll">
         <table>
-          <thead><tr><th>Point Name</th><th>Name</th><th>Degrees to next point</th><th>Next Point Name</th><th>Current depth</th></tr></thead>
+          <thead><tr><th>Point Name</th><th>Name</th><th>Symbol</th><th>Degrees to next point</th><th>Next Point Name</th><th>Current depth</th></tr></thead>
           <tbody>{routeRows.map(({ point, vector }) => (
             <tr key={vector?.id ?? `terminal-${point.id}`}>
               <td><div className="point-name-cell"><input aria-label={`${point.label} Point Name`} value={point.label} disabled={point.label === "A0"} onChange={(event) => updatePointLabel(point.id, event.target.value)}/><button className="delete-point" aria-label={`Delete ${point.label}`} disabled={point.label === "A0"} title={point.label === "A0" ? "A0 is required" : `Delete ${point.label}`} onClick={() => deletePoint(point.id)}><SoundingsIcon name="trash"/></button></div></td>
               <td><input aria-label={`${point.label} Name`} value={point.name ?? ""} onChange={(event) => mutate((current) => { const item = current.waypoints.find((entry) => entry.id === point.id); if (item) item.name = event.target.value; return current; }, false)}/></td>
+              <td><div className="point-symbol-cell">{point.symbol ? <PointSymbolImage className="point-symbol-table-preview" symbol={point.symbol}/> : <span className="point-symbol-circle-preview" aria-hidden="true"/>}<select aria-label={`${point.label} symbol`} value={point.symbol ?? ""} onChange={(event) => setPointSymbol(point.id, normalizePointSymbol(event.target.value))}><option value="">Circle</option>{POINT_SYMBOLS.map((symbol) => <option value={symbol.id} key={symbol.id}>{symbol.label}</option>)}</select></div></td>
               <td>{vector ? <input aria-label={`${point.label} degrees to next point`} defaultValue={round(vector.bearing)} inputMode="decimal" onBlur={(event) => updateVectorBearing(vector.id, event.target.value)}/> : <span className="empty-cell">—</span>}</td>
               <td><select aria-label={`${point.label} next point name`} value={vector?.toId ?? ""} onChange={(event) => vector ? setVectorTarget(vector.id, event.target.value) : connectPoints(point.id, event.target.value)}><option value="">{vector ? "Choose point" : "Connect to…"}</option>{possibleNextPoints(project, point.id, vector?.id).map((candidate) => <option value={candidate.id} key={candidate.id}>{candidate.label}{candidate.name ? ` — ${candidate.name}` : ""}</option>)}</select></td>
               <td><input aria-label={`${point.label} current depth`} inputMode="decimal" placeholder={project.depthUnit} value={point.depth ?? ""} onChange={(event) => mutate((current) => { const item = current.waypoints.find((entry) => entry.id === point.id); if (item) item.depth = event.target.value === "" ? undefined : Number(event.target.value); return current; }, false)}/></td>
@@ -804,8 +840,8 @@ export default function ScubaMapMaker() {
             {project.waypoints.map((point) => {
               const named = hasDescriptiveName(point);
               const displayName = point.name?.trim() ?? "";
-              return <button key={point.id} aria-label={named ? `Edit ${point.label} — ${displayName}` : `Edit ${point.label} connection point`} className={`waypoint ${named ? "named-point" : "junction-point"}${selectedId === point.id ? " selected" : ""}${point.label === "A0" ? " origin" : ""}${exportClass(pointInPrintArea(point, printArea))}`} style={{ ...waypointDisplayStyle, left: point.x, top: point.y }} onClick={(event) => { event.stopPropagation(); setSelectedId(point.id); setSelectedVectorId(null); setActivePanel(null); setTool("select"); }} onPointerDown={(event) => startDrag(event, "waypoint", point.id)}>
-                {named && <span className={`point-dot${exportClass(exportSettings.pointMarkers)}`}/>} {!named && <span className="junction-handle" aria-hidden="true"/>}
+              return <button key={point.id} aria-label={named ? `Edit ${point.label} — ${displayName}` : `Edit ${point.label} connection point`} className={`waypoint ${named ? "named-point" : "junction-point"}${named && point.symbol ? " has-symbol" : ""}${selectedId === point.id ? " selected" : ""}${point.label === "A0" ? " origin" : ""}${exportClass(pointInPrintArea(point, printArea))}`} style={{ ...waypointDisplayStyle, left: point.x, top: point.y }} onClick={(event) => { event.stopPropagation(); setSelectedId(point.id); setSelectedVectorId(null); setActivePanel(null); setTool("select"); }} onPointerDown={(event) => startDrag(event, "waypoint", point.id)}>
+                {named && (point.symbol ? <PointSymbolImage className={`point-symbol-marker${exportClass(exportSettings.pointMarkers)}`} symbol={point.symbol}/> : <span className={`point-dot${exportClass(exportSettings.pointMarkers)}`}/>)} {!named && <span className="junction-handle" aria-hidden="true"/>}
               </button>;
             })}
             {project.waypoints.map((point) => {
@@ -838,7 +874,12 @@ export default function ScubaMapMaker() {
           {smartCalloutCandidate && <>
             <svg className="smart-callout-leaders screen-hidden" data-layout-mode={smartCalloutCandidate.layout.mode} viewBox={`0 0 ${PRINT_FRAME.width} ${PRINT_FRAME.height}`} shapeRendering="geometricPrecision" aria-hidden="true">
               {smartCalloutCandidate.layout.callouts.map((callout) => <polyline key={callout.id} data-smart-callout-leader={callout.id} points={callout.leader.map((point) => `${point.x},${point.y}`).join(" ")}/>) }
-              {exportSettings.pointMarkers && smartCalloutCandidate.layout.callouts.map((callout) => <circle className="smart-callout-anchor-marker" data-smart-callout-marker={callout.id} key={callout.id} cx={callout.leader[0].x} cy={callout.leader[0].y} r="2"/>)}
+              {exportSettings.pointMarkers && smartCalloutCandidate.layout.callouts.map((callout) => {
+                const symbol = pointMap.get(callout.id)?.symbol;
+                return symbol
+                  ? <image className="smart-callout-anchor-symbol" data-smart-callout-marker={callout.id} key={callout.id} href={pointSymbolDefinition(symbol).asset} x={callout.leader[0].x - 12} y={callout.leader[0].y - 9} width="24" height="18" preserveAspectRatio="xMidYMid meet"/>
+                  : <circle className="smart-callout-anchor-marker" data-smart-callout-marker={callout.id} key={callout.id} cx={callout.leader[0].x} cy={callout.leader[0].y} r="2"/>;
+              })}
             </svg>
             <div className="smart-callout-labels screen-hidden" aria-hidden="true">
               {smartCalloutCandidate.layout.callouts.map((callout) => <div className={`smart-callout-label smart-callout-${callout.side}`} data-smart-callout={callout.id} key={callout.id} style={{ left: callout.box.x, top: callout.box.y, width: callout.box.width, height: callout.box.height }}>{callout.lines.map((line, index) => <span key={`${callout.id}-${index}`}>{line}{index < callout.lines.length - 1 ? " " : ""}</span>)}</div>)}
@@ -864,6 +905,7 @@ export default function ScubaMapMaker() {
               <div className="inspector-body">
                 <label>Point Name<input value={selected.label} disabled={selected.label === "A0"} onChange={(event) => updatePointLabel(selected.id, event.target.value)}/></label>
                 <label>Name<input value={selected.name ?? ""} placeholder="Add a descriptive name" onChange={(event) => mutate((current) => { const point = current.waypoints.find((item) => item.id === selected.id); if (point) point.name = event.target.value; return current; }, false)}/></label>
+                <PointSymbolPicker point={selected} onChange={(symbol) => setPointSymbol(selected.id, symbol)}/>
                 <label className="compact-field">Depth<input value={selected.depth ?? ""} placeholder={project.depthUnit} inputMode="decimal" onChange={(event) => mutate((current) => { const point = current.waypoints.find((item) => item.id === selected.id); if (point) point.depth = event.target.value === "" ? undefined : Number(event.target.value); return current; }, false)}/></label>
                 {selectedOffsetKinds.length > 0 && <section className="annotation-reset-section" aria-label="Label positions"><div className="annotation-reset-heading"><span>Label positions</span>{selectedOffsetKinds.length > 1 && <button type="button" aria-label={`Reset all label positions for ${selected.label}`} onClick={() => resetAnnotationOffsets(selected.id)}>Reset all</button>}</div><div className="annotation-reset-list">{selectedOffsetKinds.map((annotationKind) => <div key={annotationKind}><span>{POINT_ANNOTATION_LABELS[annotationKind]}</span><button type="button" aria-label={`Reset ${POINT_ANNOTATION_LABELS[annotationKind]} position for ${selected.label}`} onClick={() => resetAnnotationOffsets(selected.id, annotationKind)}>Reset</button></div>)}</div></section>}
                 {selectedConnection && <dl className="route-summary"><div><dt>From</dt><dd>{selectedConnectionStart?.label ?? selected.label}</dd></div><div><dt>Bearing</dt><dd>{Math.round(selectedConnection.bearing).toString().padStart(3, "0")}°</dd></div><div><dt>Distance</dt><dd>{formatNumber(selectedConnection.distance)} {selectedConnection.unit}</dd></div></dl>}
