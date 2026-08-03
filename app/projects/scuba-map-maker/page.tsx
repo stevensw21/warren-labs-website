@@ -712,6 +712,7 @@ export default function ScubaMapMaker() {
     const text = annotationText(point, annotationKind);
     return offset && text ? [{ point, annotationKind, offset, text }] : [];
   }));
+  const routeSymbolPoints = project.waypoints.filter((point) => hasDescriptiveName(point) && point.symbol);
   const renderAnnotationChip = (annotationKind: PointAnnotationKind, text: string) => <span className={`point-annotation-chip point-annotation-${annotationKind}${annotationKind === "name" && !visibleLayers.pointNames ? " screen-primary-name" : ""}${annotationKind === "name" && !exportSettings.pointNames ? " print-primary-name" : ""}`}>{text}</span>;
   const routeRows = project.waypoints.reduce<Array<{ point: Point; vector: Vector | null }>>((rows, point) => {
     const outgoing = project.vectors.filter((vector) => vector.fromId === point.id);
@@ -725,7 +726,7 @@ export default function ScubaMapMaker() {
   const shoreStrokeStyle = { "--shore-base-width": `${12 / zoom}px`, "--shore-edge-width": `${2 / zoom}px` } as CSSProperties;
   const routeHitHeight = 30 / zoom;
   const routeControlStyle = { "--route-hit-height": `${routeHitHeight}px`, "--route-hit-offset": `${-routeHitHeight / 2}px`, "--route-label-border": `${1 / zoom}px`, "--route-label-radius": `${3 / zoom}px`, "--route-label-font": `${11 / zoom}px`, "--route-label-padding-y": `${2 / zoom}px`, "--route-label-padding-x": `${4 / zoom}px` } as CSSProperties;
-  const routeNetworkStyle = { "--route-width": `${2 / zoom}px`, "--route-selected-width": `${3 / zoom}px`, "--route-chevron-width": `${2 / zoom}px`, "--route-branch-radius": `${1 / zoom}px`, "--print-route-width": `${2 / effectivePrintScale}px`, "--print-route-branch-radius": `${1 / effectivePrintScale}px` } as CSSProperties;
+  const routeNetworkStyle = { "--route-width": `${2 / zoom}px`, "--route-selected-width": `${3 / zoom}px`, "--route-chevron-width": `${2 / zoom}px`, "--route-branch-radius": `${1 / zoom}px`, "--route-symbol-cutout-radius": `${30 / zoom}px`, "--print-route-width": `${2 / effectivePrintScale}px`, "--print-route-branch-radius": `${1 / effectivePrintScale}px`, "--print-route-symbol-cutout-radius": `${20 / effectivePrintScale}px` } as CSSProperties;
   const selectedDirectionPath = selectedRouteLine ? directionChevronPath(selectedRouteLine, zoom) : "";
   const waypointDisplayStyle = { "--point-hit-size": `${44 / zoom}px`, "--point-dot-size": `${14 / zoom}px`, "--point-dot-border": `${2 / zoom}px`, "--point-ring": `${1 / zoom}px`, "--point-origin-ring": `${2 / zoom}px`, "--point-selected-ring": `${3 / zoom}px`, "--point-shadow": `${1 / zoom}px`, "--point-shadow-blur": `${4 / zoom}px`, "--point-symbol-size": `${38 / zoom}px`, "--junction-size": `${10 / zoom}px`, "--junction-border": `${2 / zoom}px`, "--junction-halo": `${4 / zoom}px` } as CSSProperties;
   const printAreaDisplayStyle = { "--print-area-stroke": `${2 / zoom}px`, "--print-area-dash": `${8 / zoom}px`, "--print-area-dash-gap": `${6 / zoom}px`, "--print-area-label-top": `${-2 / zoom}px`, "--print-area-label-padding-y": `${4 / zoom}px`, "--print-area-label-padding-x": `${7 / zoom}px`, "--print-area-label-font": `${10 / zoom}px`, "--print-area-handle-size": `${14 / zoom}px`, "--print-area-handle-offset": `${-8 / zoom}px`, "--print-area-focus-width": `${2 / zoom}px`, "--print-area-focus-offset": `${2 / zoom}px` } as CSSProperties;
@@ -802,14 +803,22 @@ export default function ScubaMapMaker() {
             {shorelinePath && <svg className={`shoreline-path${visibleLayers.shoreline ? "" : " screen-hidden"}${exportClass(exportSettings.shoreline)}`} style={shoreStrokeStyle} viewBox={`0 0 ${CANVAS.width} ${CANVAS.height}`} aria-hidden="true"><path className="shoreline-base" d={shorelinePath}/><path className="shoreline-edge" d={shorelinePath}/></svg>}
             {!project.shoreLocked && visibleLayers.shoreline && coast.map((vertex) => <button key={vertex.id} aria-label="Move shoreline vertex" className="coast-vertex" style={{ left: vertex.x, top: vertex.y }} onPointerDown={(event) => startDrag(event, "coast", vertex.id)} />)}
             {visualRouteNetwork.paths.length > 0 && <svg className={`route-network${visibleLayers.routes ? "" : " screen-hidden"}${exportClass(exportSettings.routes)}`} style={routeNetworkStyle} viewBox={`0 0 ${CANVAS.width} ${CANVAS.height}`} shapeRendering="geometricPrecision" aria-hidden="true">
-              <g className="route-network-base">
-                {visualRouteNetwork.paths.map((path) => <path className="route-network-path" key={path.key} d={routePathData(path, pointMap)}/>)}
-                {visualRouteNetwork.branchPointIds.map((pointId) => { const point = pointMap.get(pointId); return point ? <circle className="route-network-branch" data-route-branch={pointId} key={pointId} cx={point.x} cy={point.y}/> : null; })}
+              <defs>
+                <mask id="route-symbol-clearance-mask" className="route-symbol-mask" maskUnits="userSpaceOnUse" maskContentUnits="userSpaceOnUse" x="0" y="0" width={CANVAS.width} height={CANVAS.height}>
+                  <rect x="0" y="0" width={CANVAS.width} height={CANVAS.height} fill="white"/>
+                  {routeSymbolPoints.map((point) => <circle className={`route-symbol-cutout${exportClass(exportSettings.pointMarkers && pointInPrintArea(point, printArea))}`} data-route-symbol-cutout={point.id} key={point.id} cx={point.x} cy={point.y} fill="black"/>)}
+                </mask>
+              </defs>
+              <g className="route-network-ink" mask="url(#route-symbol-clearance-mask)">
+                <g className="route-network-base">
+                  {visualRouteNetwork.paths.map((path) => <path className="route-network-path" key={path.key} d={routePathData(path, pointMap)}/>)}
+                  {visualRouteNetwork.branchPointIds.map((pointId) => { const point = pointMap.get(pointId); return point ? <circle className="route-network-branch" data-route-branch={pointId} key={pointId} cx={point.x} cy={point.y}/> : null; })}
+                </g>
+                {selectedRouteLine && selectedRouteLine.pixels > 0 && <g className="route-network-selection print-hidden">
+                  <line className="route-selection-line" x1={selectedRouteLine.start.x} y1={selectedRouteLine.start.y} x2={selectedRouteLine.end.x} y2={selectedRouteLine.end.y}/>
+                  {selectedDirectionPath && <path className="route-direction" d={selectedDirectionPath}/>}
+                </g>}
               </g>
-              {selectedRouteLine && selectedRouteLine.pixels > 0 && <g className="route-network-selection print-hidden">
-                <line className="route-selection-line" x1={selectedRouteLine.start.x} y1={selectedRouteLine.start.y} x2={selectedRouteLine.end.x} y2={selectedRouteLine.end.y}/>
-                {selectedDirectionPath && <path className="route-direction" d={selectedDirectionPath}/>}
-              </g>}
             </svg>}
             {project.vectors.map((vector) => {
               const line = geometry(project, vector); if (!line) return null;

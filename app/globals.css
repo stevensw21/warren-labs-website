@@ -175,6 +175,8 @@ svg { display: block; }
 .shoreline-edge { stroke: var(--sand-edge); stroke-width: var(--shore-edge-width, 2px); opacity: .78; }
 .coast-vertex { position: absolute; z-index: 5; width: 18px; height: 18px; padding: 0; border: 2px solid var(--sand-edge); border-radius: 50%; background: #f2ead7; transform: translate(-50%, -50%); box-shadow: 0 1px 5px rgba(7,27,41,.22); }
 .route-network { position: absolute; inset: 0; z-index: 6; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+.route-symbol-mask { mask-type: luminance; }
+.route-symbol-cutout { r: var(--route-symbol-cutout-radius, 30px); }
 .route-network-path { fill: none; stroke: var(--map-ink); stroke-width: var(--route-width, 2px); stroke-linecap: butt; stroke-linejoin: miter; stroke-miterlimit: 2.5; }
 .route-network-branch { r: var(--route-branch-radius, 1px); fill: var(--map-ink); }
 .route-selection-line { stroke: var(--coral); stroke-width: var(--route-selected-width, 3px); stroke-linecap: butt; }
@@ -504,7 +506,7 @@ svg { display: block; }
   .coast-vertex { display: none !important; }
   .shoreline-base { stroke-width: 8px !important; }
   .shoreline-edge { stroke-width: 2px !important; }
-  .route-network { --route-width: var(--print-route-width) !important; --route-branch-radius: var(--print-route-branch-radius) !important; }
+  .route-network { --route-width: var(--print-route-width) !important; --route-branch-radius: var(--print-route-branch-radius) !important; --route-symbol-cutout-radius: var(--print-route-symbol-cutout-radius) !important; }
   .route-network-path { stroke: #174b5c !important; }
   .route-network-branch { fill: #174b5c !important; }
   .route-network-selection, .vector-line { display: none !important; }
