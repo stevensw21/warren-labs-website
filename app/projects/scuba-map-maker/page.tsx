@@ -13,6 +13,20 @@ import {
 } from "./point-annotations";
 import { layoutPrintCallouts, type PrintRect } from "./print-callouts";
 import { buildRouteNetwork, type RoutePath } from "./route-network";
+import {
+  appendVectorToRoute,
+  createRoute,
+  joinRoutes,
+  normalizeRoutes,
+  reverseRoute,
+  routeEndpointKind,
+  routeEndpoints,
+  routeForVector,
+  routeLabelAnchor,
+  routePointIds,
+  routeStepPointIds,
+  type SavedRoute,
+} from "./route-model";
 
 type Unit = "ft" | "m" | "mi";
 type Point = { id: string; label: string; name?: string; symbol?: PointSymbolId; x: number; y: number; depth?: number; labelOffsets?: PointLabelOffsets };
@@ -26,7 +40,7 @@ type ExportSettings = { reference: boolean; shoreline: boolean; routes: boolean;
 type ExportToggleKey = Exclude<keyof ExportSettings, "namePlacement">;
 type Project = {
   version: 1; id: string; title: string; date: string; notes: string; distanceUnit: Unit; depthUnit: Unit;
-  coastline: CoastPoint[]; shoreLocked?: boolean; waypoints: Point[]; vectors: Vector[]; reference: ReferenceImage; calibration?: Calibration; exportSettings?: ExportSettings; printArea?: PrintArea;
+  coastline: CoastPoint[]; shoreLocked?: boolean; waypoints: Point[]; vectors: Vector[]; routes?: SavedRoute[]; reference: ReferenceImage; calibration?: Calibration; exportSettings?: ExportSettings; printArea?: PrintArea;
 };
 type Tool = "select" | "coast" | "origin" | "point" | "reference" | "printArea";
 type ActivePanel = "projects" | "points" | "settings" | "route" | "export" | null;
@@ -53,7 +67,7 @@ const round = (value: number, precision = 2) => Math.round(value * 10 ** precisi
 const formatNumber = (value: number) => new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(value);
 const emptyProject = (title = "Untitled dive site"): Project => ({
   version: 1, id: id(), title, date: new Date().toISOString().slice(0, 10), notes: "", distanceUnit: "ft", depthUnit: "ft",
-  coastline: [], shoreLocked: false, waypoints: [], vectors: [], calibration: { metersPerPixel: DEFAULT_METERS_PER_PIXEL }, exportSettings: { ...DEFAULT_EXPORT_SETTINGS },
+  coastline: [], shoreLocked: false, waypoints: [], vectors: [], routes: [], calibration: { metersPerPixel: DEFAULT_METERS_PER_PIXEL }, exportSettings: { ...DEFAULT_EXPORT_SETTINGS },
   reference: { opacity: 0.48, scale: 1, x: 0, y: 0, visible: true, locked: false },
 });
 
@@ -146,6 +160,7 @@ function normalizeProject(raw: Project): Project {
     return normalizePointAnnotationOffsets({ ...point, name: point.name ?? "", symbol: normalizePointSymbol(point.symbol) });
   });
   project.vectors = (project.vectors ?? []).map((vector) => ({ ...vector, unit: METERS_PER_UNIT[vector.unit] ? vector.unit : project.distanceUnit }));
+  project.routes = normalizeRoutes(project.waypoints, project.vectors, project.routes, { createId: id });
   project.shoreLocked = project.shoreLocked ?? false;
   const savedExportSettings = project.exportSettings ?? DEFAULT_EXPORT_SETTINGS;
   const namePlacement: NamePlacement = savedExportSettings.namePlacement === "asPositioned" ? "asPositioned" : "smartCallouts";
@@ -236,6 +251,28 @@ function PointSymbolPicker({ point, onChange }: { point: Point; onChange: (symbo
   </fieldset>;
 }
 
+function RouteNameEditor({ route, fallback, onCommit }: { route: SavedRoute; fallback: string; onCommit: (name: string) => void }) {
+  const [draft, setDraft] = useState(route.name);
+  const commit = () => {
+    const next = draft.trim();
+    if (next !== route.name) onCommit(next);
+    if (draft !== next) setDraft(next);
+  };
+  return <label className="route-name-field">Route name
+    <input
+      value={draft}
+      placeholder={fallback}
+      aria-label={`Route name for ${route.name.trim() || fallback}`}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={commit}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") { event.preventDefault(); event.currentTarget.blur(); }
+        if (event.key === "Escape") { event.preventDefault(); setDraft(route.name); event.currentTarget.blur(); }
+      }}
+    />
+  </label>;
+}
+
 export default function ScubaMapMaker() {
   const [project, setProject] = useState<Project | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -243,11 +280,13 @@ export default function ScubaMapMaker() {
   const [tool, setTool] = useState<Tool>("select");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedVectorId, setSelectedVectorId] = useState<string | null>(null);
+  const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
   const [zoom, setZoom] = useState(0.78);
   const [pan, setPan] = useState({ x: 22, y: 24 });
   const [undoStack, setUndoStack] = useState<Project[]>([]);
   const [redoStack, setRedoStack] = useState<Project[]>([]);
-  const [vectorForm, setVectorForm] = useState({ bearing: "0", distance: "30", label: "", depth: "" });
+  const [vectorForm, setVectorForm] = useState({ bearing: "0", distance: "30", label: "", depth: "", routeId: "new", routeName: "" });
+  const [connectRouteByPoint, setConnectRouteByPoint] = useState<Record<string, string>>({});
   const [calibrationForm, setCalibrationForm] = useState({ distance: "", unit: "ft" as Unit });
   const [notice, setNotice] = useState("Loading local map library…");
   const [activePanel, setActivePanel] = useState<ActivePanel>(null);
@@ -297,7 +336,7 @@ export default function ScubaMapMaker() {
   useEffect(() => { zoomRef.current = zoom; }, [zoom]);
   useEffect(() => {
     const panWithArrowKeys = (event: KeyboardEvent) => {
-      if (event.key === "Escape") { setActivePanel(null); setSelectedId(null); setSelectedVectorId(null); return; }
+      if (event.key === "Escape") { setActivePanel(null); setSelectedId(null); setSelectedVectorId(null); setSelectedRouteId(null); return; }
       const target = event.target;
       if (target instanceof HTMLElement && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName))) return;
       const step = event.shiftKey ? 180 : 60;
@@ -333,6 +372,10 @@ export default function ScubaMapMaker() {
 
   const selected = project?.waypoints.find((point) => point.id === selectedId) ?? null;
   const selectedVector = project?.vectors.find((vector) => vector.id === selectedVectorId) ?? null;
+  const routes = project?.routes ?? [];
+  const selectedRoute = routes.find((route) => route.id === selectedRouteId)
+    ?? (selectedVector ? routeForVector(routes, selectedVector.id) : undefined)
+    ?? null;
   const depthPoints = useMemo(() => (project?.waypoints.filter((point) => point.depth !== undefined) ?? []), [project]);
   const pointMap = useMemo(() => new Map(project?.waypoints.map((point) => [point.id, point]) ?? []), [project]);
   const visualRouteNetwork = useMemo(() => project ? buildRouteNetwork(project.waypoints, project.vectors) : { paths: [], branchPointIds: [] }, [project]);
@@ -345,6 +388,38 @@ export default function ScubaMapMaker() {
     syncChannel.current?.postMessage({ type: "project-update", source: windowId.current, project: next });
   };
   const mutate = (fn: (current: Project) => Project, record = true) => project && update(fn(clone(project)), record);
+  const routeFallbackName = (route: SavedRoute) => `Unnamed route ${Math.max(1, routes.findIndex((item) => item.id === route.id) + 1)}`;
+  const routeDisplayName = (route: SavedRoute) => route.name.trim() || routeFallbackName(route);
+  const eligibleRoutesAtPoint = (pointId: string) => routes.filter((route) => {
+    const endpoints = routeEndpoints(route, project?.vectors ?? []);
+    return Boolean(endpoints && !endpoints.closed && endpoints.endId === pointId);
+  });
+  const focusRoute = (route: SavedRoute, openDrawer = true, vectorId?: string) => {
+    setSelectedRouteId(route.id);
+    const nextVectorId = vectorId && route.steps.some((step) => step.vectorId === vectorId) ? vectorId : route.steps[0]?.vectorId;
+    setSelectedVectorId(nextVectorId ?? null);
+    if (nextVectorId && project) {
+      const vector = project.vectors.find((item) => item.id === nextVectorId);
+      if (vector) setCalibrationForm({ distance: String(vector.distance), unit: vector.unit });
+    }
+    if (openDrawer) { setSelectedId(null); setActivePanel("route"); }
+  };
+  const commitRouteName = (routeId: string, name: string) => {
+    mutate((current) => {
+      const route = (current.routes ?? []).find((item) => item.id === routeId);
+      if (route) route.name = name.trim();
+      return current;
+    });
+    setNotice(name.trim() ? `Route named “${name.trim()}”.` : "Route name cleared.");
+  };
+  const reverseSavedRoute = (routeId: string) => {
+    mutate((current) => {
+      const index = (current.routes ?? []).findIndex((route) => route.id === routeId);
+      if (index >= 0) current.routes![index] = reverseRoute(current.routes![index]);
+      return current;
+    });
+    setNotice("Route direction reversed. Its former start is now the active endpoint.");
+  };
   const setPointSymbol = (pointId: string, symbol?: PointSymbolId) => {
     mutate((current) => {
       const point = current.waypoints.find((item) => item.id === pointId);
@@ -489,7 +564,7 @@ export default function ScubaMapMaker() {
     setPan(nextPan);
   };
   const startDrag = (event: PointerEvent<HTMLButtonElement>, kind: "waypoint" | "coast", itemId: string) => {
-    event.stopPropagation(); if (!project || (kind === "coast" && project.shoreLocked)) return; event.currentTarget.setPointerCapture(event.pointerId); drag.current = { kind, id: itemId, start: clone(project), x: event.clientX, y: event.clientY }; setSelectedId(kind === "waypoint" ? itemId : null); setSelectedVectorId(null); setActivePanel(null); setTool("select");
+    event.stopPropagation(); if (!project || (kind === "coast" && project.shoreLocked)) return; event.currentTarget.setPointerCapture(event.pointerId); drag.current = { kind, id: itemId, start: clone(project), x: event.clientX, y: event.clientY }; setSelectedId(kind === "waypoint" ? itemId : null); setSelectedVectorId(null); setSelectedRouteId(null); setActivePanel(null); setTool("select");
   };
   const startAnnotationDrag = (event: PointerEvent<HTMLButtonElement>, point: Point, annotationKind: PointAnnotationKind) => {
     event.preventDefault(); event.stopPropagation();
@@ -498,7 +573,7 @@ export default function ScubaMapMaker() {
     event.currentTarget.focus({ preventScroll: true });
     event.currentTarget.setPointerCapture(event.pointerId);
     drag.current = { kind: "annotation", id: point.id, annotationKind, offset, initialOffset: { ...offset }, hadOffset: Boolean(point.labelOffsets?.[annotationKind]), moved: false, changed: false, originX: event.clientX, originY: event.clientY, start: clone(project), x: event.clientX, y: event.clientY };
-    setSelectedId(point.id); setSelectedVectorId(null); setActivePanel(null); setTool("select");
+    setSelectedId(point.id); setSelectedVectorId(null); setSelectedRouteId(null); setActivePanel(null); setTool("select");
   };
   const onAnnotationKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>, point: Point, annotationKind: PointAnnotationKind) => {
     const direction: Record<string, { x: number; y: number }> = {
@@ -512,7 +587,7 @@ export default function ScubaMapMaker() {
     const nextOffset = { dx: offset.dx + delta.x * step, dy: offset.dy + delta.y * step };
     if (nextOffset.dx === offset.dx && nextOffset.dy === offset.dy) return;
     mutate((current) => { const item = current.waypoints.find((candidate) => candidate.id === point.id); if (item) assignAnnotationOffset(item, annotationKind, nextOffset); return current; });
-    setSelectedId(point.id); setSelectedVectorId(null); setActivePanel(null); setTool("select");
+    setSelectedId(point.id); setSelectedVectorId(null); setSelectedRouteId(null); setActivePanel(null); setTool("select");
   };
   const startPrintAreaAdjust = (event: PointerEvent<HTMLButtonElement>, handle: PrintAreaHandle) => {
     event.preventDefault(); event.stopPropagation();
@@ -528,15 +603,46 @@ export default function ScubaMapMaker() {
     setTool("select");
     setNotice(willLock ? "Shoreline locked. Drawing tools are minimized." : "Shoreline unlocked. You can draw or adjust the coast again.");
   };
-  const selectVector = (vector: Vector) => { setSelectedVectorId(vector.id); setSelectedId(null); setActivePanel("route"); setCalibrationForm({ distance: String(vector.distance), unit: vector.unit }); setNotice("Route line selected. Set its known distance to calibrate the map."); };
+  const selectVector = (vector: Vector) => {
+    setSelectedVectorId(vector.id);
+    setSelectedId(null);
+    const route = routeForVector(routes, vector.id);
+    setSelectedRouteId(route?.id ?? null);
+    setActivePanel("route");
+    setCalibrationForm({ distance: String(vector.distance), unit: vector.unit });
+    setNotice(route ? `${routeDisplayName(route)} selected. The clicked segment remains the calibration reference.` : "Route segment selected for calibration.");
+  };
   const addVector = () => {
     if (!project || !selected) { setNotice("Select A0 or another waypoint first."); return; }
     const bearing = Number(vectorForm.bearing); const distance = Number(vectorForm.distance);
     if (!Number.isFinite(bearing) || !Number.isFinite(distance) || distance <= 0) { setNotice("Enter a valid bearing and positive distance."); return; }
     const pixels = (distance * METERS_PER_UNIT[project.distanceUnit]) / mapScale(project); const radians = ((bearing % 360) * Math.PI) / 180;
     const next = { id: id(), label: vectorForm.label.trim() || `P${project.waypoints.filter((point) => point.label.startsWith("P")).length + 1}`, name: "", x: Math.max(0, Math.min(CANVAS.width, selected.x + Math.sin(radians) * pixels)), y: Math.max(0, Math.min(CANVAS.height, selected.y - Math.cos(radians) * pixels)), depth: vectorForm.depth === "" ? undefined : Number(vectorForm.depth) };
-    mutate((current) => { current.waypoints.push(next); current.vectors.push({ id: id(), fromId: selected.id, toId: next.id, bearing: 0, distance: 0, unit: current.distanceUnit }); return synchronizeVectors(current); });
-    setSelectedId(next.id); setVectorForm({ bearing: "0", distance: "30", label: "", depth: "" }); setNotice(`Added ${next.label} from ${selected.label}.`);
+    const vector: Vector = { id: id(), fromId: selected.id, toId: next.id, bearing: 0, distance: 0, unit: project.distanceUnit };
+    const eligible = eligibleRoutesAtPoint(selected.id);
+    const continuing = vectorForm.routeId === "new" ? undefined : eligible.find((route) => route.id === vectorForm.routeId);
+    let routeId = continuing?.id ?? "";
+    mutate((current) => {
+      current.waypoints.push(next);
+      current.vectors.push({ ...vector, unit: current.distanceUnit });
+      current.routes ??= [];
+      if (continuing) {
+        const routeIndex = current.routes.findIndex((route) => route.id === continuing.id);
+        const appended = routeIndex >= 0 ? appendVectorToRoute(current.routes[routeIndex], vector, current.vectors) : undefined;
+        if (routeIndex >= 0 && appended) current.routes[routeIndex] = appended;
+      } else {
+        const created = createRoute(vector, { name: vectorForm.routeName, createId: () => id() });
+        current.routes.push(created);
+        routeId = created.id;
+      }
+      return synchronizeVectors(current);
+    });
+    setSelectedId(next.id);
+    setSelectedVectorId(vector.id);
+    setSelectedRouteId(routeId);
+    setCalibrationForm({ distance: String(distance), unit: project.distanceUnit });
+    setVectorForm({ bearing: "0", distance: "30", label: "", depth: "", routeId, routeName: "" });
+    setNotice(`${continuing ? "Continued" : "Started"} ${continuing ? routeDisplayName(continuing) : vectorForm.routeName.trim() || "a new route"} at ${next.label}.`);
   };
   const calibrateMap = () => {
     if (!project || !selectedVector) return;
@@ -566,11 +672,71 @@ export default function ScubaMapMaker() {
   const setVectorTarget = (vectorId: string, targetId: string) => {
     if (!project || !targetId) return;
     const vector = project.vectors.find((item) => item.id === vectorId); if (!vector || !possibleNextPoints(project, vector.fromId, vectorId).some((point) => point.id === targetId)) { setNotice("That connection duplicates an existing route."); return; }
-    mutate((current) => { const item = current.vectors.find((entry) => entry.id === vectorId); if (item) item.toId = targetId; return synchronizeVectors(current); });
+    mutate((current) => {
+      const item = current.vectors.find((entry) => entry.id === vectorId);
+      if (item) item.toId = targetId;
+      current.routes = normalizeRoutes(current.waypoints, current.vectors, current.routes, { createId: () => id() });
+      return synchronizeVectors(current);
+    });
+    setNotice("Segment retargeted. Any broken route was split into continuous named fragments.");
   };
   const connectPoints = (fromId: string, targetId: string) => {
     if (!project || !targetId || !possibleNextPoints(project, fromId).some((point) => point.id === targetId)) { setNotice("That connection duplicates an existing route."); return; }
-    mutate((current) => { current.vectors.push({ id: id(), fromId, toId: targetId, bearing: 0, distance: 0, unit: current.distanceUnit }); return synchronizeVectors(current); });
+    const vector: Vector = { id: id(), fromId, toId: targetId, bearing: 0, distance: 0, unit: project.distanceUnit };
+    const eligible = eligibleRoutesAtPoint(fromId);
+    const choice = connectRouteByPoint[fromId] ?? eligible[0]?.id ?? "new";
+    let sourceRoute = choice === "new" ? undefined : eligible.find((route) => route.id === choice);
+    const sourcePointIds = sourceRoute ? routePointIds(sourceRoute, project.vectors) : [];
+    const sourceEndpoints = sourceRoute ? routeEndpoints(sourceRoute, project.vectors) : undefined;
+
+    if (sourceRoute && sourceEndpoints?.startId === targetId) {
+      if (!window.confirm(`Close ${routeDisplayName(sourceRoute)} back to its start?`)) return;
+    } else if (sourceRoute && sourcePointIds.includes(targetId)) {
+      // Returning to an interior point is a branch, not a continuation of the
+      // ordered path. Keep the new segment in its own route.
+      sourceRoute = undefined;
+    }
+
+    const targetRoute = sourceRoute ? routes.find((route) => {
+      if (route.id === sourceRoute!.id) return false;
+      const endpoints = routeEndpoints(route, project.vectors);
+      return Boolean(endpoints && !endpoints.closed && routeEndpointKind(route, targetId, project.vectors));
+    }) : undefined;
+    let joined: SavedRoute | undefined;
+    if (sourceRoute && targetRoute && window.confirm(`Join ${routeDisplayName(sourceRoute)} and ${routeDisplayName(targetRoute)}?\n\nChoose Cancel to keep them separate.`)) {
+      const firstName = sourceRoute.name.trim();
+      const secondName = targetRoute.name.trim();
+      let finalName = firstName || secondName;
+      if (firstName && secondName && firstName !== secondName) {
+        finalName = window.prompt("Name the joined route", firstName)?.trim() ?? firstName;
+      }
+      joined = joinRoutes(sourceRoute, targetRoute, [...project.vectors, vector], { connectingVector: vector, name: finalName });
+      if (!joined) { setNotice("Those routes could not be joined safely. No connection was added."); return; }
+    }
+
+    let routeId = joined?.id ?? sourceRoute?.id ?? "";
+    mutate((current) => {
+      current.vectors.push({ ...vector, unit: current.distanceUnit });
+      current.routes ??= [];
+      if (joined && sourceRoute && targetRoute) {
+        const insertionIndex = Math.max(0, current.routes.findIndex((route) => route.id === sourceRoute!.id));
+        current.routes = current.routes.filter((route) => route.id !== sourceRoute!.id && route.id !== targetRoute.id);
+        current.routes.splice(Math.min(insertionIndex, current.routes.length), 0, joined);
+      } else if (sourceRoute) {
+        const routeIndex = current.routes.findIndex((route) => route.id === sourceRoute!.id);
+        const appended = routeIndex >= 0 ? appendVectorToRoute(current.routes[routeIndex], vector, current.vectors) : undefined;
+        if (routeIndex >= 0 && appended) current.routes[routeIndex] = appended;
+      } else {
+        const created = createRoute(vector, { createId: () => id() });
+        current.routes.push(created);
+        routeId = created.id;
+      }
+      return synchronizeVectors(current);
+    });
+    setSelectedRouteId(routeId);
+    setSelectedVectorId(vector.id);
+    setConnectRouteByPoint((current) => ({ ...current, [targetId]: routeId }));
+    setNotice(joined ? `Routes joined as ${joined.name || routeDisplayName(joined)}.` : sourceRoute ? `Continued ${routeDisplayName(sourceRoute)}.` : "Started a new unnamed route.");
   };
   const updateVectorBearing = (vectorId: string, bearing: string) => {
     const degrees = Number(bearing); if (!project || !Number.isFinite(degrees)) return;
@@ -582,7 +748,12 @@ export default function ScubaMapMaker() {
     if (!point) return;
     if (point.label === "A0") { setNotice("A0 is the required root and cannot be removed. Start a new project to reset it."); return; }
     if (!window.confirm(`Delete ${point.label} and its attached routes?`)) return;
-    mutate((current) => { current.waypoints = current.waypoints.filter((item) => item.id !== point.id); current.vectors = current.vectors.filter((vector) => vector.fromId !== point.id && vector.toId !== point.id); return current; });
+    mutate((current) => {
+      current.waypoints = current.waypoints.filter((item) => item.id !== point.id);
+      current.vectors = current.vectors.filter((vector) => vector.fromId !== point.id && vector.toId !== point.id);
+      current.routes = normalizeRoutes(current.waypoints, current.vectors, current.routes, { createId: () => id() });
+      return current;
+    });
     setSelectedId((current) => current === point.id ? null : current);
     setNotice("Removed the point and its attached routes.");
   };
@@ -594,9 +765,9 @@ export default function ScubaMapMaker() {
   const changeDistanceUnit = (unit: Unit) => mutate((current) => { current.distanceUnit = unit; return synchronizeVectors(current); }, false);
   const setExportSetting = (setting: ExportToggleKey, value: boolean) => mutate((current) => { current.exportSettings = { ...DEFAULT_EXPORT_SETTINGS, ...current.exportSettings, [setting]: value }; return current; }, false);
   const setNamePlacement = (namePlacement: NamePlacement) => mutate((current) => { current.exportSettings = { ...DEFAULT_EXPORT_SETTINGS, ...current.exportSettings, namePlacement }; return current; }, false);
-  const newProject = () => { const next = emptyProject("New dive site"); setProject(next); setProjects((items) => [next, ...items]); setSelectedId(null); setSelectedVectorId(null); setUndoStack([]); setRedoStack([]); void persistProject(next); setNotice("New project created locally."); };
+  const newProject = () => { const next = emptyProject("New dive site"); setProject(next); setProjects((items) => [next, ...items]); setSelectedId(null); setSelectedVectorId(null); setSelectedRouteId(null); setUndoStack([]); setRedoStack([]); void persistProject(next); setNotice("New project created locally."); };
   const duplicateProject = () => { if (!project) return; const next = clone(project); next.id = id(); next.title = `${project.title} copy`; setProject(next); setProjects((items) => [next, ...items]); void persistProject(next); setNotice("Project duplicated locally."); };
-  const deleteProject = () => { if (!project || !window.confirm(`Delete “${project.title}” from this browser?`)) return; void removeProjectFromStore(project.id); const remaining = projects.filter((item) => item.id !== project.id); const next = remaining[0] ?? emptyProject("New dive site"); setProjects(remaining.length ? remaining : [next]); setProject(next); setSelectedId(null); if (!remaining.length) void persistProject(next); setNotice("Local project deleted."); };
+  const deleteProject = () => { if (!project || !window.confirm(`Delete “${project.title}” from this browser?`)) return; void removeProjectFromStore(project.id); const remaining = projects.filter((item) => item.id !== project.id); const next = remaining[0] ?? emptyProject("New dive site"); setProjects(remaining.length ? remaining : [next]); setProject(next); setSelectedId(null); setSelectedVectorId(null); setSelectedRouteId(null); if (!remaining.length) void persistProject(next); setNotice("Local project deleted."); };
   const exportBackup = () => { if (!project) return; const blob = new Blob([JSON.stringify(project, null, 2)], { type: "application/json" }); const link = document.createElement("a"); link.href = URL.createObjectURL(blob); link.download = `${project.title.replace(/[^a-z0-9]+/gi, "-").toLowerCase() || "dive-map"}.json`; link.click(); URL.revokeObjectURL(link.href); setNotice("Editable project backup downloaded."); };
   const importBackup = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]; if (!file) return; const reader = new FileReader(); reader.onload = () => { try { const raw = JSON.parse(String(reader.result)) as Project; if (raw.version !== 1 || !Array.isArray(raw.waypoints)) throw new Error("Unsupported backup"); const imported = normalizeProject(raw); imported.id = id(); imported.title = `${imported.title || "Imported dive site"} (imported)`; setProject(imported); setProjects((items) => [imported, ...items]); void persistProject(imported); setNotice("Project backup imported into this browser."); } catch { setNotice("That file is not a compatible dive-map backup."); } }; reader.readAsText(file); event.target.value = "";
@@ -668,6 +839,7 @@ export default function ScubaMapMaker() {
     "--print-map-label-padding-y": `${2 / effectivePrintScale}px`,
     "--print-map-label-border": `${1 / effectivePrintScale}px`,
     "--print-map-label-radius": `${3 / effectivePrintScale}px`,
+    "--print-route-name-width": `${150 / effectivePrintScale}px`,
     "--print-annotation-stack-x": `${7 / effectivePrintScale}px`,
     "--print-annotation-padding-x": `${2 / effectivePrintScale}px`,
     "--print-annotation-padding-y": `${1 / effectivePrintScale}px`,
@@ -714,19 +886,68 @@ export default function ScubaMapMaker() {
   }));
   const routeSymbolPoints = project.waypoints.filter((point) => hasDescriptiveName(point) && point.symbol);
   const renderAnnotationChip = (annotationKind: PointAnnotationKind, text: string) => <span className={`point-annotation-chip point-annotation-${annotationKind}${annotationKind === "name" && !visibleLayers.pointNames ? " screen-primary-name" : ""}${annotationKind === "name" && !exportSettings.pointNames ? " print-primary-name" : ""}`}>{text}</span>;
-  const routeRows = project.waypoints.reduce<Array<{ point: Point; vector: Vector | null }>>((rows, point) => {
+  const routeRows = project.waypoints.reduce<Array<{ point: Point; vector: Vector | null; route: SavedRoute | null; stepIndex: number }>>((rows, point) => {
     const outgoing = project.vectors.filter((vector) => vector.fromId === point.id);
-    if (outgoing.length) rows.push(...outgoing.map((vector) => ({ point, vector })));
-    rows.push({ point, vector: null });
+    if (outgoing.length) rows.push(...outgoing.map((vector) => {
+      const route = routeForVector(routes, vector.id) ?? null;
+      return { point, vector, route, stepIndex: route?.steps.findIndex((step) => step.vectorId === vector.id) ?? -1 };
+    }));
+    rows.push({ point, vector: null, route: null, stepIndex: -1 });
     return rows;
   }, []);
+  const selectedRoutePointIds = selectedRoute ? routePointIds(selectedRoute, project.vectors) : [];
+  const selectedRouteEndpoints = selectedRoute ? routeEndpoints(selectedRoute, project.vectors) : undefined;
+  const selectedRoutePath = selectedRoute && selectedRoutePointIds.length >= 2
+    ? routePathData({ key: selectedRoute.id, pointIds: selectedRoutePointIds, closed: Boolean(selectedRouteEndpoints?.closed) }, pointMap)
+    : "";
+  const routeLabelAnchors = routes.flatMap((route) => {
+    const screen = routeLabelAnchor(route, project.waypoints, project.vectors);
+    const print = routeLabelAnchor(route, project.waypoints, project.vectors, printArea);
+    return screen ? [{ route, screen, print }] : [];
+  });
+  const routeEditor = (openDrawerForSegment: boolean) => <div className="route-editor">
+    <label>Route
+      <select value={selectedRoute?.id ?? ""} onChange={(event) => {
+        const route = routes.find((item) => item.id === event.target.value);
+        if (route) focusRoute(route, openDrawerForSegment);
+        else { setSelectedRouteId(null); setSelectedVectorId(null); }
+      }}>
+        <option value="">{routes.length ? "Choose a route" : "No routes yet"}</option>
+        {routes.map((route) => {
+          const endpoints = routeEndpoints(route, project.vectors);
+          const start = endpoints ? pointMap.get(endpoints.startId)?.label : "?";
+          const end = endpoints ? pointMap.get(endpoints.endId)?.label : "?";
+          return <option value={route.id} key={route.id}>{routeDisplayName(route)} · {start} → {end} · {route.steps.length} {route.steps.length === 1 ? "step" : "steps"}</option>;
+        })}
+      </select>
+    </label>
+    {selectedRoute ? <>
+      <RouteNameEditor key={`${selectedRoute.id}:${selectedRoute.name}`} route={selectedRoute} fallback={routeFallbackName(selectedRoute)} onCommit={(name) => commitRouteName(selectedRoute.id, name)}/>
+      <dl className="route-order-summary">
+        <div><dt>Ordered start</dt><dd>{selectedRouteEndpoints ? pointMap.get(selectedRouteEndpoints.startId)?.label ?? "Unknown" : "Unknown"}</dd></div>
+        <div><dt>Ordered end</dt><dd>{selectedRouteEndpoints ? pointMap.get(selectedRouteEndpoints.endId)?.label ?? "Unknown" : "Unknown"}</dd></div>
+        <div><dt>Segments</dt><dd>{selectedRoute.steps.length}</dd></div>
+      </dl>
+      <button className="secondary-button full-width route-reverse" disabled={selectedRouteEndpoints?.closed} onClick={() => reverseSavedRoute(selectedRoute.id)}><SoundingsIcon name="route"/>Reverse route</button>
+      <ol className="route-step-list" aria-label={`Ordered steps for ${routeDisplayName(selectedRoute)}`}>
+        {selectedRoute.steps.map((step, index) => {
+          const vector = project.vectors.find((item) => item.id === step.vectorId);
+          if (!vector) return null;
+          const endpoints = routeStepPointIds(step, vector);
+          const start = pointMap.get(endpoints.startId);
+          const end = pointMap.get(endpoints.endId);
+          return <li key={step.vectorId}><button className={selectedVectorId === step.vectorId ? "active" : ""} onClick={() => focusRoute(selectedRoute, openDrawerForSegment, step.vectorId)}><span>{index + 1}</span><b>{start?.label ?? "?"} → {end?.label ?? "?"}</b><small>{Math.round(vector.bearing)}° · {formatNumber(vector.distance)} {vector.unit}</small></button></li>;
+        })}
+      </ol>
+    </> : <p className="drawer-copy">Select a segment on the map or choose a route to name and order it.</p>}
+  </div>;
   const mapBar = scaleBar(project);
   const selectedRouteLine = selectedVector ? geometry(project, selectedVector) : null;
   const shorelinePath = coast.length > 1 ? `${coast.map((vertex, index) => `${index ? "L" : "M"}${vertex.x} ${vertex.y}`).join(" ")}${coast.length > 2 ? " Z" : ""}` : "";
   const shoreStrokeStyle = { "--shore-base-width": `${12 / zoom}px`, "--shore-edge-width": `${2 / zoom}px` } as CSSProperties;
-  const routeHitHeight = 30 / zoom;
-  const routeControlStyle = { "--route-hit-height": `${routeHitHeight}px`, "--route-hit-offset": `${-routeHitHeight / 2}px`, "--route-label-border": `${1 / zoom}px`, "--route-label-radius": `${3 / zoom}px`, "--route-label-font": `${11 / zoom}px`, "--route-label-padding-y": `${2 / zoom}px`, "--route-label-padding-x": `${4 / zoom}px` } as CSSProperties;
-  const routeNetworkStyle = { "--route-width": `${2 / zoom}px`, "--route-selected-width": `${3 / zoom}px`, "--route-chevron-width": `${2 / zoom}px`, "--route-branch-radius": `${1 / zoom}px`, "--route-symbol-cutout-radius": `${30 / zoom}px`, "--print-route-width": `${2 / effectivePrintScale}px`, "--print-route-branch-radius": `${1 / effectivePrintScale}px`, "--print-route-symbol-cutout-radius": `${20 / effectivePrintScale}px` } as CSSProperties;
+  const routeHitHeight = 44 / zoom;
+  const routeControlStyle = { "--route-hit-height": `${routeHitHeight}px`, "--route-hit-offset": `${-routeHitHeight / 2}px`, "--route-label-border": `${1 / zoom}px`, "--route-label-radius": `${3 / zoom}px`, "--route-label-font": `${11 / zoom}px`, "--route-label-padding-y": `${2 / zoom}px`, "--route-label-padding-x": `${4 / zoom}px`, "--route-name-font": `${12 / zoom}px`, "--route-name-width": `${154 / zoom}px`, "--route-name-padding-y": `${4 / zoom}px`, "--route-name-padding-x": `${7 / zoom}px` } as CSSProperties;
+  const routeNetworkStyle = { "--route-width": `${2 / zoom}px`, "--route-selected-width": `${3 / zoom}px`, "--route-selected-path-width": `${5 / zoom}px`, "--route-chevron-width": `${2 / zoom}px`, "--route-branch-radius": `${1 / zoom}px`, "--route-symbol-cutout-radius": `${30 / zoom}px`, "--print-route-width": `${2 / effectivePrintScale}px`, "--print-route-branch-radius": `${1 / effectivePrintScale}px`, "--print-route-symbol-cutout-radius": `${20 / effectivePrintScale}px` } as CSSProperties;
   const selectedDirectionPath = selectedRouteLine ? directionChevronPath(selectedRouteLine, zoom) : "";
   const waypointDisplayStyle = { "--point-hit-size": `${44 / zoom}px`, "--point-dot-size": `${14 / zoom}px`, "--point-dot-border": `${2 / zoom}px`, "--point-ring": `${1 / zoom}px`, "--point-origin-ring": `${2 / zoom}px`, "--point-selected-ring": `${3 / zoom}px`, "--point-shadow": `${1 / zoom}px`, "--point-shadow-blur": `${4 / zoom}px`, "--point-symbol-size": `${38 / zoom}px`, "--junction-size": `${10 / zoom}px`, "--junction-border": `${2 / zoom}px`, "--junction-halo": `${4 / zoom}px` } as CSSProperties;
   const printAreaDisplayStyle = { "--print-area-stroke": `${2 / zoom}px`, "--print-area-dash": `${8 / zoom}px`, "--print-area-dash-gap": `${6 / zoom}px`, "--print-area-label-top": `${-2 / zoom}px`, "--print-area-label-padding-y": `${4 / zoom}px`, "--print-area-label-padding-x": `${7 / zoom}px`, "--print-area-label-font": `${10 / zoom}px`, "--print-area-handle-size": `${14 / zoom}px`, "--print-area-handle-offset": `${-8 / zoom}px`, "--print-area-focus-width": `${2 / zoom}px`, "--print-area-focus-offset": `${2 / zoom}px` } as CSSProperties;
@@ -734,22 +955,29 @@ export default function ScubaMapMaker() {
   const pointLedger = (
     <section className="point-ledger">
       <div className="point-ledger-heading">
-        <div><h2>Point table</h2><p>Place points on the map, then name, connect, and describe them here. Every point keeps a Connect to… row for adding more lines, including returns to A0.</p></div>
+        <div><h2>Points and routes</h2><p>Name points and complete ordered routes here. A terminal row can continue a route only from its ordered end; choose Start new route for branches and intersections.</p></div>
         {!pointTableOnly && <button className="secondary-button" onClick={openPointTableWindow}><SoundingsIcon name="duplicate"/>Open in new window</button>}
       </div>
+      <section className="route-table-editor" aria-label="Route editor">{routeEditor(false)}</section>
       <div className="table-scroll">
         <table>
-          <thead><tr><th>Point Name</th><th>Name</th><th>Symbol</th><th>Degrees to next point</th><th>Next Point Name</th><th>Current depth</th></tr></thead>
-          <tbody>{routeRows.map(({ point, vector }) => (
-            <tr key={vector?.id ?? `terminal-${point.id}`}>
+          <thead><tr><th>Point Name</th><th>Name</th><th>Symbol</th><th>Route / step</th><th>Degrees to next point</th><th>Next Point Name</th><th>Current depth</th></tr></thead>
+          <tbody>{routeRows.map(({ point, vector, route, stepIndex }) => {
+            const eligible = vector ? [] : eligibleRoutesAtPoint(point.id);
+            const routeChoice = connectRouteByPoint[point.id] ?? eligible[0]?.id ?? "new";
+            return <tr key={vector?.id ?? `terminal-${point.id}`}>
               <td><div className="point-name-cell"><input aria-label={`${point.label} Point Name`} value={point.label} disabled={point.label === "A0"} onChange={(event) => updatePointLabel(point.id, event.target.value)}/><button className="delete-point" aria-label={`Delete ${point.label}`} disabled={point.label === "A0"} title={point.label === "A0" ? "A0 is required" : `Delete ${point.label}`} onClick={() => deletePoint(point.id)}><SoundingsIcon name="trash"/></button></div></td>
               <td><input aria-label={`${point.label} Name`} value={point.name ?? ""} onChange={(event) => mutate((current) => { const item = current.waypoints.find((entry) => entry.id === point.id); if (item) item.name = event.target.value; return current; }, false)}/></td>
               <td><div className="point-symbol-cell">{point.symbol ? <PointSymbolImage className="point-symbol-table-preview" symbol={point.symbol}/> : <span className="point-symbol-circle-preview" aria-hidden="true"/>}<select aria-label={`${point.label} symbol`} value={point.symbol ?? ""} onChange={(event) => setPointSymbol(point.id, normalizePointSymbol(event.target.value))}><option value="">Circle</option>{POINT_SYMBOLS.map((symbol) => <option value={symbol.id} key={symbol.id}>{symbol.label}</option>)}</select></div></td>
+              <td>{vector && route
+                ? <button className="route-table-link" onClick={() => focusRoute(route, false, vector.id)}><b>{routeDisplayName(route)}</b><span>Step {stepIndex + 1} of {route.steps.length}</span></button>
+                : <select aria-label={`${point.label} route for next connection`} value={routeChoice} onChange={(event) => setConnectRouteByPoint((current) => ({ ...current, [point.id]: event.target.value }))}><option value="new">Start new route</option>{eligible.map((item) => <option value={item.id} key={item.id}>Continue {routeDisplayName(item)}</option>)}</select>}
+              </td>
               <td>{vector ? <input aria-label={`${point.label} degrees to next point`} defaultValue={round(vector.bearing)} inputMode="decimal" onBlur={(event) => updateVectorBearing(vector.id, event.target.value)}/> : <span className="empty-cell">—</span>}</td>
               <td><select aria-label={`${point.label} next point name`} value={vector?.toId ?? ""} onChange={(event) => vector ? setVectorTarget(vector.id, event.target.value) : connectPoints(point.id, event.target.value)}><option value="">{vector ? "Choose point" : "Connect to…"}</option>{possibleNextPoints(project, point.id, vector?.id).map((candidate) => <option value={candidate.id} key={candidate.id}>{candidate.label}{candidate.name ? ` — ${candidate.name}` : ""}</option>)}</select></td>
               <td><input aria-label={`${point.label} current depth`} inputMode="decimal" placeholder={project.depthUnit} value={point.depth ?? ""} onChange={(event) => mutate((current) => { const item = current.waypoints.find((entry) => entry.id === point.id); if (item) item.depth = event.target.value === "" ? undefined : Number(event.target.value); return current; }, false)}/></td>
-            </tr>
-          ))}</tbody>
+            </tr>;
+          })}</tbody>
         </table>
       </div>
     </section>
@@ -769,7 +997,7 @@ export default function ScubaMapMaker() {
   const selectProject = (projectId: string) => {
     const next = projects.find((item) => item.id === projectId);
     if (!next) return;
-    setProject(next); setSelectedId(null); setSelectedVectorId(null); setUndoStack([]); setRedoStack([]); setActivePanel(null);
+    setProject(next); setSelectedId(null); setSelectedVectorId(null); setSelectedRouteId(null); setUndoStack([]); setRedoStack([]); setActivePanel(null);
   };
 
   return (
@@ -814,20 +1042,32 @@ export default function ScubaMapMaker() {
                   {visualRouteNetwork.paths.map((path) => <path className="route-network-path" key={path.key} d={routePathData(path, pointMap)}/>)}
                   {visualRouteNetwork.branchPointIds.map((pointId) => { const point = pointMap.get(pointId); return point ? <circle className="route-network-branch" data-route-branch={pointId} key={pointId} cx={point.x} cy={point.y}/> : null; })}
                 </g>
-                {selectedRouteLine && selectedRouteLine.pixels > 0 && <g className="route-network-selection print-hidden">
-                  <line className="route-selection-line" x1={selectedRouteLine.start.x} y1={selectedRouteLine.start.y} x2={selectedRouteLine.end.x} y2={selectedRouteLine.end.y}/>
+                {(selectedRoutePath || selectedRouteLine) && <g className="route-network-selection print-hidden">
+                  {selectedRoutePath && <path className="route-selection-path" d={selectedRoutePath}/>}
+                  {selectedRouteLine && selectedRouteLine.pixels > 0 && <line className="route-selection-line" x1={selectedRouteLine.start.x} y1={selectedRouteLine.start.y} x2={selectedRouteLine.end.x} y2={selectedRouteLine.end.y}/>}
                   {selectedDirectionPath && <path className="route-direction" d={selectedDirectionPath}/>}
                 </g>}
               </g>
             </svg>}
             {project.vectors.map((vector) => {
               const line = geometry(project, vector); if (!line) return null;
-              const selectedRoute = selectedVectorId === vector.id;
+              const selectedSegment = selectedVectorId === vector.id;
               return <div className="vector-group" key={vector.id}>
-                <button className={`vector-line${selectedRoute ? " selected-vector" : ""}${visibleLayers.routes ? "" : " screen-hidden"}${exportClass(exportSettings.routes)}`} aria-label={`Select route from ${line.start.label} to ${line.end.label}`} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); selectVector(vector); }} style={{ ...routeControlStyle, left: line.start.x, top: line.start.y, width: line.pixels, transform: `rotate(${Math.atan2(line.dy, line.dx)}rad)` }}/>
+                <button className={`vector-line${selectedSegment ? " selected-vector" : ""}${visibleLayers.routes ? "" : " screen-hidden"}${exportClass(exportSettings.routes)}`} aria-label={`Select route segment from ${line.start.label} to ${line.end.label}`} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); selectVector(vector); }} style={{ ...routeControlStyle, left: line.start.x, top: line.start.y, width: line.pixels, transform: `rotate(${Math.atan2(line.dy, line.dx)}rad)` }}/>
                 <button className={`vector-label${visibleLayers.routeLabels ? "" : " screen-hidden"}${exportClass(exportSettings.routeLabels)}`} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); selectVector(vector); }} style={{ ...routeControlStyle, left: line.start.x + line.dx / 2, top: line.start.y + line.dy / 2 }}><span>{Math.round(vector.bearing)}°</span><span>{formatNumber(vector.distance)} {vector.unit}</span></button>
               </div>;
             })}
+            {routeLabelAnchors.map(({ route, screen, print }) => <Fragment key={`route-name-${route.id}`}>
+              <button
+                className={`route-name-label print-hidden${visibleLayers.routeLabels ? "" : " screen-hidden"}`}
+                style={{ ...routeControlStyle, left: screen.x, top: screen.y }}
+                title={route.name}
+                aria-label={`Route ${route.name}`}
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => { event.stopPropagation(); focusRoute(route); }}
+              ><span>{route.name}</span></button>
+              {print && <span className={`route-name-label route-name-label-print screen-hidden${exportClass(exportSettings.routeLabels)}`} style={{ ...routeControlStyle, left: print.x, top: print.y }} aria-label={`Route ${route.name}`}><span>{route.name}</span></span>}
+            </Fragment>)}
             {depthPoints.length >= 3 && <div className={`contours${visibleLayers.contours ? "" : " screen-hidden"}${exportClass(exportSettings.contours)}`} style={{ left: depthPoints.reduce((sum, point) => sum + point.x, 0) / depthPoints.length, top: depthPoints.reduce((sum, point) => sum + point.y, 0) / depthPoints.length }}><i/><i/><i/><span>estimated depth contours</span></div>}
             {manualAnnotations.length > 0 && <svg className="point-leaders" style={annotationDisplayStyle} viewBox={`0 0 ${CANVAS.width} ${CANVAS.height}`} shapeRendering="geometricPrecision" aria-hidden="true">
               {manualAnnotations.map(({ point, annotationKind, offset }) => {
@@ -849,7 +1089,7 @@ export default function ScubaMapMaker() {
             {project.waypoints.map((point) => {
               const named = hasDescriptiveName(point);
               const displayName = point.name?.trim() ?? "";
-              return <button key={point.id} aria-label={named ? `Edit ${point.label} — ${displayName}` : `Edit ${point.label} connection point`} className={`waypoint ${named ? "named-point" : "junction-point"}${named && point.symbol ? " has-symbol" : ""}${selectedId === point.id ? " selected" : ""}${point.label === "A0" ? " origin" : ""}${exportClass(pointInPrintArea(point, printArea))}`} style={{ ...waypointDisplayStyle, left: point.x, top: point.y }} onClick={(event) => { event.stopPropagation(); setSelectedId(point.id); setSelectedVectorId(null); setActivePanel(null); setTool("select"); }} onPointerDown={(event) => startDrag(event, "waypoint", point.id)}>
+              return <button key={point.id} aria-label={named ? `Edit ${point.label} — ${displayName}` : `Edit ${point.label} connection point`} className={`waypoint ${named ? "named-point" : "junction-point"}${named && point.symbol ? " has-symbol" : ""}${selectedId === point.id ? " selected" : ""}${point.label === "A0" ? " origin" : ""}${exportClass(pointInPrintArea(point, printArea))}`} style={{ ...waypointDisplayStyle, left: point.x, top: point.y }} onClick={(event) => { event.stopPropagation(); setSelectedId(point.id); setSelectedVectorId(null); setSelectedRouteId(null); setActivePanel(null); setTool("select"); }} onPointerDown={(event) => startDrag(event, "waypoint", point.id)}>
                 {named && (point.symbol ? <PointSymbolImage className={`point-symbol-marker${exportClass(exportSettings.pointMarkers)}`} symbol={point.symbol}/> : <span className={`point-dot${exportClass(exportSettings.pointMarkers)}`}/>)} {!named && <span className="junction-handle" aria-hidden="true"/>}
               </button>;
             })}
@@ -873,7 +1113,7 @@ export default function ScubaMapMaker() {
                     "--annotation-print-left": `${printPosition.x}px`,
                     "--annotation-print-top": `${printPosition.y}px`,
                   } as CSSProperties : {};
-                  return <button type="button" data-point-id={point.id} data-annotation-kind={annotationKind} data-manual-position={offset ? "true" : "false"} key={annotationKind} className={`point-annotation ${offset ? "point-annotation-manual" : "point-annotation-auto"}${annotationVisibilityClass(point, annotationKind)}`} style={{ ...annotationDisplayStyle, ...automaticStyle, ...manualPrintStyle, left: position.x, top: position.y }} aria-label={`Move ${POINT_ANNOTATION_LABELS[annotationKind]} for ${point.label}. Use arrow keys for fine positioning.`} onClick={(event) => { event.stopPropagation(); setSelectedId(point.id); setSelectedVectorId(null); setActivePanel(null); setTool("select"); }} onPointerDown={(event) => startAnnotationDrag(event, point, annotationKind)} onKeyDown={(event) => onAnnotationKeyDown(event, point, annotationKind)}>{renderAnnotationChip(annotationKind, text)}</button>;
+                  return <button type="button" data-point-id={point.id} data-annotation-kind={annotationKind} data-manual-position={offset ? "true" : "false"} key={annotationKind} className={`point-annotation ${offset ? "point-annotation-manual" : "point-annotation-auto"}${annotationVisibilityClass(point, annotationKind)}`} style={{ ...annotationDisplayStyle, ...automaticStyle, ...manualPrintStyle, left: position.x, top: position.y }} aria-label={`Move ${POINT_ANNOTATION_LABELS[annotationKind]} for ${point.label}. Use arrow keys for fine positioning.`} onClick={(event) => { event.stopPropagation(); setSelectedId(point.id); setSelectedVectorId(null); setSelectedRouteId(null); setActivePanel(null); setTool("select"); }} onPointerDown={(event) => startAnnotationDrag(event, point, annotationKind)} onKeyDown={(event) => onAnnotationKeyDown(event, point, annotationKind)}>{renderAnnotationChip(annotationKind, text)}</button>;
                 })}
               </Fragment>;
             })}
@@ -946,7 +1186,31 @@ export default function ScubaMapMaker() {
 
             {activePanel === "settings" && <><PanelHeading icon="settings" title="Settings" onClose={() => setActivePanel(null)}/><div className="drawer-body"><div className="drawer-section first"><h3>Dive site</h3><label>Title<input value={project.title} aria-label="Dive site title" onChange={(event) => mutate((current) => ({ ...current, title: event.target.value }), false)}/></label><label>Date<input type="date" value={project.date} onChange={(event) => mutate((current) => ({ ...current, date: event.target.value }), false)}/></label><div className="field-grid"><label>Distance unit<select value={project.distanceUnit} onChange={(event) => changeDistanceUnit(event.target.value as Unit)}>{Object.entries(UNIT_LABEL).map(([value, name]) => <option value={value} key={value}>{name}</option>)}</select></label><label>Depth unit<select value={project.depthUnit} onChange={(event) => mutate((current) => ({ ...current, depthUnit: event.target.value as Unit }), false)}>{Object.entries(UNIT_LABEL).map(([value, name]) => <option value={value} key={value}>{name}</option>)}</select></label></div><label>Notes<textarea value={project.notes} placeholder="Dive conditions or site notes" onChange={(event) => mutate((current) => ({ ...current, notes: event.target.value }), false)}/></label></div><div className="drawer-section"><h3>Reference image</h3><label className="upload-button"><SoundingsIcon name="image"/>{project.reference.dataUrl ? "Replace reference" : "Upload reference image"}<input type="file" accept="image/*" onChange={onReferenceUpload}/></label>{project.reference.dataUrl && <><div className="range-label"><span>Opacity</span><output>{Math.round(project.reference.opacity * 100)}%</output></div><input type="range" min="0" max="1" step="0.05" value={project.reference.opacity} onChange={(event) => mutate((current) => ({ ...current, reference: { ...current.reference, opacity: Number(event.target.value) } }), false)}/><div className="range-label"><span>Size</span><output>{project.reference.scale.toFixed(1)}×</output></div><input type="range" min="0.4" max="2.4" step="0.1" value={project.reference.scale} onChange={(event) => mutate((current) => ({ ...current, reference: { ...current.reference, scale: Number(event.target.value) } }), false)}/><div className="button-row"><button className={tool === "reference" ? "active" : ""} onClick={() => { setTool("reference"); setActivePanel(null); }}><SoundingsIcon name="select"/>Move</button><button onClick={() => mutate((current) => ({ ...current, reference: { ...current.reference, locked: !current.reference.locked } }))}><SoundingsIcon name={project.reference.locked ? "unlock" : "lock"}/>{project.reference.locked ? "Unlock" : "Lock"}</button></div></>}</div><div className="drawer-section"><h3>Shoreline</h3><button className="action-row" onClick={toggleShoreLock}><SoundingsIcon name={project.shoreLocked ? "unlock" : "lock"}/><span><b>{project.shoreLocked ? "Unlock shore" : "Lock shore"}</b><small>{project.shoreLocked ? "Allow drawing and adjustment" : "Protect the finished trace"}</small></span></button>{coast.length >= 3 && <button className="danger-button" onClick={() => mutate((current) => { current.coastline = []; return current; })}><SoundingsIcon name="trash"/>Clear shoreline</button>}</div></div></>}
 
-            {activePanel === "route" && <><PanelHeading icon="route" title="Route" onClose={() => { setActivePanel(null); setSelectedVectorId(null); }}/><div className="drawer-body">{selected ? <div className="drawer-section first"><h3>New route from {selected.label}</h3><p className="drawer-copy">Starting depth {formatDepth(selected, project.depthUnit)}</p><div className="field-grid"><label>Bearing °<input inputMode="decimal" value={vectorForm.bearing} onChange={(event) => setVectorForm({ ...vectorForm, bearing: event.target.value })}/></label><label>Distance<input inputMode="decimal" value={vectorForm.distance} onChange={(event) => setVectorForm({ ...vectorForm, distance: event.target.value })}/></label><label>New Point Name<input placeholder="P1" value={vectorForm.label} onChange={(event) => setVectorForm({ ...vectorForm, label: event.target.value })}/></label><label>Depth<input placeholder={project.depthUnit} inputMode="decimal" value={vectorForm.depth} onChange={(event) => setVectorForm({ ...vectorForm, depth: event.target.value })}/></label></div><button className="primary-button" onClick={addVector}>Add vector from {selected.label}</button></div> : <div className="empty-panel"><SoundingsIcon name="route"/><h3>Select a starting point</h3><p>Choose A0 or another waypoint on the map, then open Route to add a bearing and distance.</p></div>}<div className="drawer-section"><h3>Calibrate map scale</h3><label>Reference route<select value={selectedVectorId ?? ""} onChange={(event) => { const vector = project.vectors.find((item) => item.id === event.target.value); if (vector) selectVector(vector); else setSelectedVectorId(null); }}><option value="">Select a route line</option>{project.vectors.map((vector) => { const start = pointMap.get(vector.fromId); const end = pointMap.get(vector.toId); return <option value={vector.id} key={vector.id}>{start?.label} → {end?.label}</option>; })}</select></label>{selectedVector && selectedRouteLine ? <><p className="drawer-copy">This line currently measures {formatNumber(selectedVector.distance)} {selectedVector.unit}. Enter its known real distance.</p><div className="field-grid"><label>Known distance<input inputMode="decimal" value={calibrationForm.distance} onChange={(event) => setCalibrationForm({ ...calibrationForm, distance: event.target.value })}/></label><label>Unit<select value={calibrationForm.unit} onChange={(event) => setCalibrationForm({ ...calibrationForm, unit: event.target.value as Unit })}>{Object.entries(UNIT_LABEL).map(([value, name]) => <option value={value} key={value}>{name}</option>)}</select></label></div><button className="secondary-button full-width" onClick={calibrateMap}><SoundingsIcon name="calibrate"/>Set map scale</button></> : <p className="drawer-copy">Click a route line or choose one above to set the real-world scale.</p>}<p className="scale-note">Current scale: {formatNumber(mapScale(project))} meters per map pixel.</p></div></div></>}
+            {activePanel === "route" && <>
+              <PanelHeading icon="route" title="Route" onClose={() => { setActivePanel(null); setSelectedVectorId(null); setSelectedRouteId(null); }}/>
+              <div className="drawer-body route-drawer-body">
+                <div className="drawer-section first"><h3>Ordered route</h3>{routeEditor(true)}</div>
+                {selected ? <div className="drawer-section route-creation-section">
+                  <h3>Add segment from {selected.label}</h3>
+                  <p className="drawer-copy">Starting depth {formatDepth(selected, project.depthUnit)}. Only a route whose ordered end is {selected.label} can continue; otherwise this starts a new route.</p>
+                  <label>Route assignment
+                    <select value={eligibleRoutesAtPoint(selected.id).some((route) => route.id === vectorForm.routeId) ? vectorForm.routeId : "new"} onChange={(event) => {
+                      const routeId = event.target.value;
+                      setVectorForm({ ...vectorForm, routeId });
+                      const route = routes.find((item) => item.id === routeId);
+                      if (route) setSelectedRouteId(route.id);
+                    }}>
+                      <option value="new">Start new route</option>
+                      {eligibleRoutesAtPoint(selected.id).map((route) => <option value={route.id} key={route.id}>Continue {routeDisplayName(route)}</option>)}
+                    </select>
+                  </label>
+                  {(vectorForm.routeId === "new" || !eligibleRoutesAtPoint(selected.id).some((route) => route.id === vectorForm.routeId)) && <label>New route name (optional)<input value={vectorForm.routeName} placeholder="Unnamed route" onChange={(event) => setVectorForm({ ...vectorForm, routeName: event.target.value })}/></label>}
+                  <div className="field-grid"><label>Bearing °<input inputMode="decimal" value={vectorForm.bearing} onChange={(event) => setVectorForm({ ...vectorForm, bearing: event.target.value })}/></label><label>Distance<input inputMode="decimal" value={vectorForm.distance} onChange={(event) => setVectorForm({ ...vectorForm, distance: event.target.value })}/></label><label>New Point Name<input placeholder="P1" value={vectorForm.label} onChange={(event) => setVectorForm({ ...vectorForm, label: event.target.value })}/></label><label>Depth<input placeholder={project.depthUnit} inputMode="decimal" value={vectorForm.depth} onChange={(event) => setVectorForm({ ...vectorForm, depth: event.target.value })}/></label></div>
+                  <button className="primary-button" onClick={addVector}>Add segment from {selected.label}</button>
+                </div> : <div className="drawer-section"><div className="empty-panel"><SoundingsIcon name="route"/><h3>Select a starting point</h3><p>Choose A0 or another waypoint on the map to start or continue a route.</p></div></div>}
+                <div className="drawer-section"><h3>Calibrate map scale</h3><label>Reference segment<select value={selectedVectorId ?? ""} onChange={(event) => { const vector = project.vectors.find((item) => item.id === event.target.value); if (vector) selectVector(vector); else setSelectedVectorId(null); }}><option value="">Select a route segment</option>{project.vectors.map((vector) => { const start = pointMap.get(vector.fromId); const end = pointMap.get(vector.toId); const route = routeForVector(routes, vector.id); return <option value={vector.id} key={vector.id}>{route ? `${routeDisplayName(route)} · ` : ""}{start?.label} → {end?.label}</option>; })}</select></label>{selectedVector && selectedRouteLine ? <><p className="drawer-copy">This segment currently measures {formatNumber(selectedVector.distance)} {selectedVector.unit}. Enter its known real distance.</p><div className="field-grid"><label>Known distance<input inputMode="decimal" value={calibrationForm.distance} onChange={(event) => setCalibrationForm({ ...calibrationForm, distance: event.target.value })}/></label><label>Unit<select value={calibrationForm.unit} onChange={(event) => setCalibrationForm({ ...calibrationForm, unit: event.target.value as Unit })}>{Object.entries(UNIT_LABEL).map(([value, name]) => <option value={value} key={value}>{name}</option>)}</select></label></div><button className="secondary-button full-width" onClick={calibrateMap}><SoundingsIcon name="calibrate"/>Set map scale</button></> : <p className="drawer-copy">Click a segment or choose one above to set the real-world scale.</p>}<p className="scale-note">Current scale: {formatNumber(mapScale(project))} meters per map pixel.</p></div>
+              </div>
+            </>}
 
             {activePanel === "export" && <>
               <PanelHeading icon="export" title="Export" onClose={() => setActivePanel(null)}/>
@@ -976,7 +1240,7 @@ export default function ScubaMapMaker() {
 
           {visibleLayers.mapFurniture && <><div className="screen-north print-hidden"><b>N</b><svg viewBox="0 0 34 56" aria-hidden="true"><path d="M17 2 31 46 17 39 3 46 17 2Z"/><path d="m17 2 14 44-14-7V2Z"/></svg></div><div className="screen-scale print-hidden"><div className="scale-labels"><span>0</span><span>{formatNumber(mapBar.value / 2)}</span><span>{formatNumber(mapBar.value)} {project.distanceUnit}</span></div><i/></div></>}
           <div className="zoom-controls print-hidden"><button aria-label="Zoom out" onClick={() => setZoom((value) => Math.max(0.1, value / 1.25))}>−</button><span>{Math.round(zoom * 100)}%</span><button aria-label="Zoom in" onClick={() => setZoom((value) => value * 1.25)}>＋</button><button className="recenter-button" aria-label="Recenter map" onClick={() => { setPan({ x: 22, y: 24 }); setZoom(0.78); }}><SoundingsIcon name="origin"/></button></div>
-          <div className="map-readout print-hidden"><span>{formatNumber(mapScale(project))} m / px</span><span>{project.waypoints.length} {project.waypoints.length === 1 ? "point" : "points"}</span><span>{project.vectors.length} {project.vectors.length === 1 ? "route" : "routes"}</span></div>
+          <div className="map-readout print-hidden"><span>{formatNumber(mapScale(project))} m / px</span><span>{project.waypoints.length} {project.waypoints.length === 1 ? "point" : "points"}</span><span>{routes.length} {routes.length === 1 ? "route" : "routes"}</span></div>
         </div>
         <section className="print-details"><h2>{project.title}</h2><p>{project.notes || "Dive-site sketch prepared with Soundings."}</p><p className="print-scale">Scale: {formatNumber(mapScale(project))} meters per map pixel · {formatNumber(mapBar.value)} {project.distanceUnit} scale bar</p><table className={exportClass(exportSettings.pointTable)}><thead><tr><th>Point</th><th>Name</th><th>Depth</th><th>Position</th></tr></thead><tbody>{printPoints.map((point) => <tr key={point.id}><td>{point.label}</td><td>{point.name || "—"}</td><td>{formatDepth(point, project.depthUnit)}</td><td>{Math.round(point.x)}, {Math.round(point.y)}</td></tr>)}</tbody></table></section>
       </section>

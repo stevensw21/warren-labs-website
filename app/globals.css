@@ -179,11 +179,16 @@ svg { display: block; }
 .route-symbol-cutout { r: var(--route-symbol-cutout-radius, 30px); }
 .route-network-path { fill: none; stroke: var(--map-ink); stroke-width: var(--route-width, 2px); stroke-linecap: butt; stroke-linejoin: miter; stroke-miterlimit: 2.5; }
 .route-network-branch { r: var(--route-branch-radius, 1px); fill: var(--map-ink); }
+.route-selection-path { fill: none; stroke: rgba(255,103,85,.6); stroke-width: var(--route-selected-path-width, 5px); stroke-linecap: butt; stroke-linejoin: miter; }
 .route-selection-line { stroke: var(--coral); stroke-width: var(--route-selected-width, 3px); stroke-linecap: butt; }
 .route-network .route-direction { fill: none; stroke: var(--coral); stroke-width: var(--route-chevron-width, 2px); stroke-linecap: round; stroke-linejoin: round; }
 .vector-line { position: absolute; z-index: 6; height: var(--route-hit-height, 22px); margin-top: var(--route-hit-offset, -10px); padding: 0; border: 0; background: transparent; cursor: pointer; transform-origin: left center; }
 .vector-label { position: absolute; z-index: 8; display: grid; gap: 1px; padding: 1px 3px; border: 0; background: transparent; color: var(--map-ink); font-size: var(--route-label-font, 11px); font-weight: 650; line-height: 1.05; white-space: nowrap; text-align: left; transform: translate(-50%, -140%); text-shadow: none; }
 .vector-label:hover, .selected-vector + .vector-label { color: var(--coral); }
+.route-name-label { position: absolute; z-index: 8; display: grid; place-items: center; width: var(--route-name-width, 154px); min-height: var(--route-hit-height, 44px); padding: 0; border: 0; background: transparent; color: white; font-size: var(--route-name-font, 12px); font-weight: 760; line-height: 1.15; text-align: center; transform: translate(-50%, 18%); }
+.route-name-label > span { display: -webkit-box; max-width: 100%; padding: var(--route-name-padding-y, 4px) var(--route-name-padding-x, 7px); overflow: hidden; border: var(--route-label-border, 1px) solid rgba(7,27,41,.2); border-radius: var(--route-label-radius, 3px); background: rgba(7,27,41,.88); box-shadow: 0 2px 8px rgba(7,27,41,.16); overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.route-name-label:hover > span, .route-name-label:focus-visible > span { background: var(--coral); }
+.route-name-label-print { pointer-events: none; }
 .point-leaders { position: absolute; inset: 0; z-index: 7; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
 .point-leader { fill: none; stroke: rgba(11,48,75,.58); stroke-width: var(--point-leader-width, 1px); stroke-linecap: round; }
 .waypoint { position: absolute; z-index: 9; display: grid; place-items: center; min-width: var(--point-hit-size, 44px); min-height: var(--point-hit-size, 44px); padding: 0; border: 0; border-radius: 50%; background: transparent; transform: translate(-50%, -50%); }
@@ -326,6 +331,21 @@ svg { display: block; }
 .drawer-section h3 { margin: 0; color: var(--on-dark); font-size: 13px; font-weight: 700; }
 .drawer-copy { margin: 0; color: var(--on-dark-muted); font-size: 12px; line-height: 1.5; }
 .drawer-copy.lead { margin-bottom: 3px; }
+.route-editor { display: grid; gap: 11px; min-width: 0; }
+.route-editor > label { display: grid; gap: 6px; min-width: 0; color: var(--on-dark-muted); font-size: 12px; font-weight: 550; }
+.route-order-summary { display: grid; grid-template-columns: 1fr 1fr 70px; gap: 6px; margin: 0; }
+.route-order-summary div { display: grid; align-content: center; min-height: 54px; padding: 7px 8px; border: 1px solid var(--divider); border-radius: 4px; background: rgba(255,255,255,.025); }
+.route-order-summary dt, .route-order-summary dd { min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.route-order-summary dt { color: var(--on-dark-muted); font-size: 9px; font-weight: 650; }
+.route-order-summary dd { margin-top: 3px; color: var(--on-dark); font-size: 12px; font-weight: 720; }
+.route-reverse:disabled { opacity: .42; }
+.route-step-list { display: grid; gap: 5px; max-height: 184px; margin: 0; padding: 0; overflow-y: auto; list-style: none; }
+.route-step-list button { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; align-items: center; gap: 7px; width: 100%; min-height: 42px; padding: 5px 8px; border: 1px solid var(--divider); border-radius: 4px; background: rgba(255,255,255,.025); color: var(--on-dark); text-align: left; }
+.route-step-list button:hover, .route-step-list button.active { border-color: rgba(255,103,85,.72); background: rgba(255,103,85,.08); }
+.route-step-list button > span { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: rgba(255,255,255,.08); color: var(--on-dark-muted); font-size: 10px; font-weight: 750; }
+.route-step-list b { overflow: hidden; font-size: 11px; font-weight: 720; text-overflow: ellipsis; white-space: nowrap; }
+.route-step-list small { color: var(--on-dark-muted); font-size: 9px; white-space: nowrap; }
+.route-creation-section { gap: 13px; }
 .field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .field-grid label { min-width: 0; }
 .drawer-body textarea { min-height: 82px; resize: vertical; }
@@ -375,8 +395,13 @@ svg { display: block; }
 .point-ledger-heading h2 { margin: 0 0 6px; color: var(--on-dark); font-size: 16px; }
 .point-ledger-heading p { max-width: 660px; margin: 0; color: var(--on-dark-muted); font-size: 11px; line-height: 1.45; }
 .point-ledger-heading .secondary-button { flex: 0 0 auto; }
+.route-table-editor { margin-bottom: 14px; padding: 12px; border: 1px solid var(--divider); border-radius: 4px; background: rgba(255,255,255,.02); }
+.route-table-editor .route-editor { grid-template-columns: minmax(210px, .9fr) minmax(210px, 1fr) minmax(300px, 1.35fr) 150px; align-items: end; }
+.route-table-editor .route-order-summary { align-self: stretch; }
+.route-table-editor .route-reverse { min-height: 54px; }
+.route-table-editor .route-step-list { grid-column: 1 / -1; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); max-height: 96px; }
 .table-scroll { overflow: auto; border: 1px solid var(--divider); border-radius: 4px; }
-.point-ledger table { width: 100%; min-width: 1040px; border-collapse: collapse; font-size: 11px; }
+.point-ledger table { width: 100%; min-width: 1260px; border-collapse: collapse; font-size: 11px; }
 .point-ledger th { padding: 9px 8px; background: rgba(255,255,255,.05); color: var(--on-dark-muted); font-size: 9px; font-weight: 700; letter-spacing: .04em; text-align: left; }
 .point-ledger td { padding: 6px; border-top: 1px solid var(--divider); }
 .point-ledger input, .point-ledger select { min-height: 36px; padding: 7px 8px; font-size: 11px; }
@@ -384,6 +409,10 @@ svg { display: block; }
 .point-symbol-cell > .point-symbol-circle-preview { justify-self: center; color: var(--on-dark); }
 .point-symbol-table-preview { width: 36px; height: 28px; object-fit: contain; filter: invert(1); opacity: .86; }
 .point-name-cell { display: grid; grid-template-columns: minmax(100px, 1fr) 36px; gap: 5px; }
+.route-table-link { display: grid; gap: 2px; width: 100%; min-height: 36px; padding: 5px 8px; border: 1px solid var(--divider); border-radius: 4px; background: rgba(255,255,255,.025); color: var(--on-dark); text-align: left; }
+.route-table-link:hover, .route-table-link:focus-visible { border-color: var(--coral); }
+.route-table-link b { overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.route-table-link span { color: var(--on-dark-muted); font-size: 9px; }
 .delete-point { display: grid; place-items: center; width: 36px; min-height: 36px; padding: 0; border: 1px solid rgba(255,103,85,.24); border-radius: 4px; background: transparent; color: var(--danger); }
 .delete-point svg { width: 16px; height: 16px; }
 .empty-cell { display: block; color: var(--on-dark-muted); text-align: center; }
@@ -483,6 +512,13 @@ svg { display: block; }
   .points-sheet-body { max-height: calc(72vh - 52px); padding: 12px; }
   .point-ledger-heading { display: grid; }
   .point-ledger-heading .secondary-button { justify-self: start; }
+  .route-table-editor .route-editor { grid-template-columns: 1fr; }
+  .route-table-editor .route-step-list { grid-column: auto; grid-template-columns: 1fr; max-height: 150px; }
+  .route-order-summary { grid-template-columns: 1fr 1fr; }
+  .route-order-summary div:last-child { grid-column: 1 / -1; min-height: 44px; }
+  .route-step-list button { grid-template-columns: 24px minmax(0, 1fr); }
+  .route-step-list small { grid-column: 2; }
+  .route-drawer-body .field-grid { grid-template-columns: 1fr 1fr; }
   .screen-north, .screen-scale, .map-readout { display: none; }
   .zoom-controls { top: 10px; right: 8px; bottom: auto; grid-template-columns: 36px 48px 36px; min-height: 34px; }
   .zoom-controls button, .zoom-controls span { min-height: 34px; font-size: 15px; }
@@ -510,8 +546,10 @@ svg { display: block; }
   .route-network-path { stroke: #174b5c !important; }
   .route-network-branch { fill: #174b5c !important; }
   .route-network-selection, .vector-line { display: none !important; }
-  .water-label, .contours span, .vector-label, .point-annotation-chip { font-size: var(--print-map-text-size) !important; }
+  .water-label, .contours span, .vector-label, .route-name-label, .point-annotation-chip { font-size: var(--print-map-text-size) !important; }
   .vector-label { gap: var(--print-map-label-gap) !important; padding: var(--print-map-label-padding-y) var(--print-map-label-padding-x) !important; border: var(--print-map-label-border) solid rgba(30,80,96,.2) !important; border-radius: var(--print-map-label-radius) !important; background: rgba(253,252,247,.92) !important; color: #174b5c !important; text-shadow: none !important; }
+  .route-name-label { width: var(--print-route-name-width) !important; min-height: 0 !important; color: #174b5c !important; transform: translate(-50%, 24%) !important; }
+  .route-name-label > span { padding: var(--print-map-label-padding-y) var(--print-map-label-padding-x) !important; border: var(--print-map-label-border) solid rgba(30,80,96,.32) !important; border-radius: var(--print-map-label-radius) !important; background: rgba(253,252,247,.96) !important; box-shadow: none !important; }
   .point-leaders { --point-leader-width: var(--print-point-leader-width) !important; }
   .point-leader { stroke: rgba(23,75,92,.68) !important; }
   .point-dot { background: #174b5c !important; border: 0 !important; box-shadow: none !important; height: var(--print-point-marker-size) !important; width: var(--print-point-marker-size) !important; }
