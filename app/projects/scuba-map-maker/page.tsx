@@ -36,7 +36,7 @@ type PrintArea = { x: number; y: number; width: number; height: number };
 type ReferenceImage = { dataUrl?: string; opacity: number; scale: number; x: number; y: number; visible: boolean; locked: boolean };
 type Calibration = { vectorId?: string; distance?: number; unit?: Unit; metersPerPixel: number };
 type NamePlacement = "smartCallouts" | "asPositioned";
-type ExportSettings = { reference: boolean; shoreline: boolean; routes: boolean; routeLabels: boolean; pointMarkers: boolean; namedPointMarkersOnly: boolean; pointNames: boolean; fullPointNames: boolean; depths: boolean; contours: boolean; mapFurniture: boolean; pointTable: boolean; namePlacement?: NamePlacement };
+type ExportSettings = { reference: boolean; shoreline: boolean; routes: boolean; routeLabels: boolean; routeNameLabels: boolean; pointMarkers: boolean; namedPointMarkersOnly: boolean; pointNames: boolean; fullPointNames: boolean; depths: boolean; contours: boolean; mapFurniture: boolean; pointTable: boolean; namePlacement?: NamePlacement };
 type ExportToggleKey = Exclude<keyof ExportSettings, "namePlacement">;
 type Project = {
   version: 1; id: string; title: string; date: string; notes: string; distanceUnit: Unit; depthUnit: Unit;
@@ -60,7 +60,7 @@ const DEFAULT_METERS_PER_PIXEL = 0.5;
 const METERS_PER_UNIT: Record<Unit, number> = { ft: 0.3048, m: 1, mi: 1609.344 };
 const UNIT_LABEL: Record<Unit, string> = { ft: "feet", m: "meters", mi: "miles" };
 const POINT_ANNOTATION_LABELS: Record<PointAnnotationKind, string> = { pointName: "Point Name", name: "Name", depth: "Depth" };
-const DEFAULT_EXPORT_SETTINGS: ExportSettings = { reference: true, shoreline: true, routes: true, routeLabels: true, pointMarkers: true, namedPointMarkersOnly: false, pointNames: true, fullPointNames: true, depths: true, contours: true, mapFurniture: true, pointTable: true, namePlacement: "smartCallouts" };
+const DEFAULT_EXPORT_SETTINGS: ExportSettings = { reference: true, shoreline: true, routes: true, routeLabels: true, routeNameLabels: true, pointMarkers: true, namedPointMarkersOnly: false, pointNames: true, fullPointNames: true, depths: true, contours: true, mapFurniture: true, pointTable: true, namePlacement: "smartCallouts" };
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value));
 const id = () => (typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`);
 const round = (value: number, precision = 2) => Math.round(value * 10 ** precision) / 10 ** precision;
@@ -164,7 +164,8 @@ function normalizeProject(raw: Project): Project {
   project.shoreLocked = project.shoreLocked ?? false;
   const savedExportSettings = project.exportSettings ?? DEFAULT_EXPORT_SETTINGS;
   const namePlacement: NamePlacement = savedExportSettings.namePlacement === "asPositioned" ? "asPositioned" : "smartCallouts";
-  project.exportSettings = { ...DEFAULT_EXPORT_SETTINGS, ...savedExportSettings, namePlacement };
+  const routeNameLabels = savedExportSettings.routeNameLabels ?? savedExportSettings.routeLabels ?? DEFAULT_EXPORT_SETTINGS.routeNameLabels;
+  project.exportSettings = { ...DEFAULT_EXPORT_SETTINGS, ...savedExportSettings, routeNameLabels, namePlacement };
   project.printArea = normalizePrintArea(project.printArea);
   project.calibration = { ...project.calibration, metersPerPixel: mapScale(project) };
   return synchronizeVectors(project);
@@ -1066,7 +1067,7 @@ export default function ScubaMapMaker() {
                 onPointerDown={(event) => event.stopPropagation()}
                 onClick={(event) => { event.stopPropagation(); focusRoute(route); }}
               ><span>{route.name}</span></button>
-              {print && <span className={`route-name-label route-name-label-print screen-hidden${exportClass(exportSettings.routeLabels)}`} style={{ ...routeControlStyle, left: print.x, top: print.y }} aria-label={`Route ${route.name}`}><span>{route.name}</span></span>}
+              {print && <span className={`route-name-label route-name-label-print screen-hidden${exportClass(exportSettings.routeNameLabels)}`} style={{ ...routeControlStyle, left: print.x, top: print.y }} aria-label={`Route ${route.name}`}><span>{route.name}</span></span>}
             </Fragment>)}
             {depthPoints.length >= 3 && <div className={`contours${visibleLayers.contours ? "" : " screen-hidden"}${exportClass(exportSettings.contours)}`} style={{ left: depthPoints.reduce((sum, point) => sum + point.x, 0) / depthPoints.length, top: depthPoints.reduce((sum, point) => sum + point.y, 0) / depthPoints.length }}><i/><i/><i/><span>estimated depth contours</span></div>}
             {manualAnnotations.length > 0 && <svg className="point-leaders" style={annotationDisplayStyle} viewBox={`0 0 ${CANVAS.width} ${CANVAS.height}`} shapeRendering="geometricPrecision" aria-hidden="true">
@@ -1220,7 +1221,7 @@ export default function ScubaMapMaker() {
                 {printArea && <p className="print-area-note">Selected area: {Math.round(printArea.width)} × {Math.round(printArea.height)} map pixels · {printPoints.length} point{printPoints.length === 1 ? "" : "s"} in PDF</p>}
                 <div className="drawer-section export-settings">
                   <h3>PDF layers</h3>
-                  <div className="export-grid">{([ ["reference", "Reference image"], ["shoreline", "Shoreline"], ["routes", "Route lines"], ["routeLabels", "Route labels"], ["pointMarkers", "Named point markers"], ["pointNames", "Point Names (A0, P1)"], ["fullPointNames", "Names (Swim platform)"], ["depths", "Depths"], ["contours", "Depth contours"], ["mapFurniture", "North arrow & scale"], ["pointTable", "Point detail table"] ] as Array<[ExportToggleKey, string]>).map(([setting, label]) => <label key={setting}><input type="checkbox" checked={exportSettings[setting]} onChange={(event) => setExportSetting(setting, event.target.checked)}/>{label}</label>)}</div>
+                  <div className="export-grid">{([ ["reference", "Reference image"], ["shoreline", "Shoreline"], ["routes", "Route lines"], ["routeLabels", "Route bearings & distances"], ["routeNameLabels", "Named route labels"], ["pointMarkers", "Named point markers"], ["pointNames", "Point Names (A0, P1)"], ["fullPointNames", "Names (Swim platform)"], ["depths", "Depths"], ["contours", "Depth contours"], ["mapFurniture", "North arrow & scale"], ["pointTable", "Point detail table"] ] as Array<[ExportToggleKey, string]>).map(([setting, label]) => <label key={setting}><input type="checkbox" checked={exportSettings[setting]} onChange={(event) => setExportSetting(setting, event.target.checked)}/>{label}</label>)}</div>
                 </div>
                 <div className="drawer-section name-placement-section">
                   <h3>Name placement</h3>

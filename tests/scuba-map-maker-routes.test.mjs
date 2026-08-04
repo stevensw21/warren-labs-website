@@ -31,6 +31,10 @@ test("keeps version-one Scuba projects compatible while persisting ordered route
   assert.match(page, /version: 1/);
   assert.match(page, /indexedDB\.open\(DB_NAME, 1\)/);
   assert.match(page, /project\.routes = normalizeRoutes\(project\.waypoints, project\.vectors, project\.routes/);
+  assert.match(page, /type ExportSettings = \{[^}]*routeLabels: boolean; routeNameLabels: boolean;/);
+  assert.match(page, /DEFAULT_EXPORT_SETTINGS: ExportSettings = \{[^}]*routeLabels: true, routeNameLabels: true,/);
+  assert.match(page, /const routeNameLabels = savedExportSettings\.routeNameLabels \?\? savedExportSettings\.routeLabels \?\? DEFAULT_EXPORT_SETTINGS\.routeNameLabels;/);
+  assert.match(page, /project\.exportSettings = \{ \.\.\.DEFAULT_EXPORT_SETTINGS, \.\.\.savedExportSettings, routeNameLabels, namePlacement \};/);
   assert.match(page, /current\.routes \?\?= \[\]/);
   assert.match(page, /BroadcastChannel\("soundings-project-sync"\)/);
   assert.match(page, /JSON\.stringify\(project, null, 2\)/);
@@ -95,7 +99,10 @@ test("selects complete routes, preserves segment calibration, and anchors screen
   assert.match(page, /routeLabelAnchor\(route, project\.waypoints, project\.vectors, printArea\)/);
   assert.match(page, /route-name-label print-hidden/);
   assert.match(page, /route-name-label route-name-label-print screen-hidden/);
-  assert.match(page, /exportClass\(exportSettings\.routeLabels\)/);
+  assert.match(page, /\["routeLabels", "Route bearings & distances"\], \["routeNameLabels", "Named route labels"\]/);
+  assert.match(page, /vector-label[^>]*exportClass\(exportSettings\.routeLabels\)/);
+  assert.match(page, /route-name-label route-name-label-print screen-hidden\$\{exportClass\(exportSettings\.routeNameLabels\)\}/);
+  assert.doesNotMatch(page, /route-name-label route-name-label-print screen-hidden\$\{exportClass\(exportSettings\.routeLabels\)\}/);
   assert.match(page, /aria-label=\{`Route \$\{route\.name\}`\}/);
   assert.match(page, /Reference segment/);
   assert.match(page, /This segment currently measures/);
