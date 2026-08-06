@@ -46,7 +46,7 @@ test("keeps version-one Scuba projects compatible while persisting ordered route
   }
 });
 
-test("ships route naming and ordered editing in the drawer and Points surfaces", async () => {
+test("ships route naming and ordered editing in the Survey workspace", async () => {
   const page = await readFile(pageUrl, "utf8");
 
   assert.match(page, /function RouteNameEditor/);
@@ -55,17 +55,20 @@ test("ships route naming and ordered editing in the drawer and Points surfaces",
   assert.match(page, /event\.key === "Escape"[\s\S]*setDraft\(route\.name\)/);
   assert.match(page, /`Unnamed route \$\{Math\.max\(1,/);
   assert.match(page, /route\.name\.trim\(\) \|\| routeFallbackName\(route\)/);
-  assert.match(page, /Ordered start/);
-  assert.match(page, /Ordered end/);
+  assert.match(page, /<dt>Start<\/dt>/);
+  assert.match(page, /<dt>End<\/dt>/);
   assert.match(page, /aria-label=\{`Ordered steps for \$\{routeDisplayName\(selectedRoute\)\}`\}/);
   assert.match(page, /className="secondary-button full-width route-reverse"[\s\S]*?Reverse route<\/button>/);
-  assert.match(page, /<section className="route-table-editor" aria-label="Route editor">\{routeEditor\(false\)\}<\/section>/);
-  assert.match(page, /<div className="drawer-section first"><h3>Ordered route<\/h3>\{routeEditor\(true\)\}<\/div>/);
-  assert.match(page, /route-table-link/);
-  assert.match(page, /Step \{stepIndex \+ 1\} of \{route\.steps\.length\}/);
+  assert.match(page, /aria-label="Survey workspace"/);
+  assert.match(page, /aria-selected=\{surveyTab === "routes"\}/);
+  assert.match(page, /<section className="survey-route-editor">/);
+  assert.match(page, /survey-route-list/);
+  assert.match(page, /\{index \+ 1\}<\/span><b>\{start\?\.label \?\? "\?"\} → \{end\?\.label \?\? "\?"\}/);
   assert.match(page, /Start new route/);
   assert.match(page, /Continue \{routeDisplayName\(route\)\}/);
   assert.match(page, /New route name \(optional\)/);
+  assert.match(page, /Next segment/);
+  assert.match(page, /Add next segment from \{selected\.label\}/);
 });
 
 test("keeps route continuation ordered and confirms closures and endpoint joins", async () => {
@@ -81,7 +84,7 @@ test("keeps route continuation ordered and confirms closures and endpoint joins"
   assert.match(page, /Choose Cancel to keep them separate/);
   assert.match(page, /window\.prompt\("Name the joined route", firstName\)/);
   assert.match(page, /joinRoutes\(sourceRoute, targetRoute, \[\.\.\.project\.vectors, vector\], \{ connectingVector: vector, name: finalName \}\)/);
-  assert.match(page, /Any broken route was split into continuous named fragments/);
+  assert.match(page, /previewFieldCaptureMerge/);
 });
 
 test("selects complete routes, preserves segment calibration, and anchors screen and PDF names", async () => {
@@ -97,6 +100,9 @@ test("selects complete routes, preserves segment calibration, and anchors screen
 
   assert.match(page, /routeLabelAnchor\(route, project\.waypoints, project\.vectors\)/);
   assert.match(page, /routeLabelAnchor\(route, project\.waypoints, project\.vectors, printArea\)/);
+  assert.match(page, /"--route-name-angle": `\$\{anchor\.angleRadians\}rad`/);
+  assert.match(page, /style=\{routeNameLabelStyle\(screen\)\}/);
+  assert.match(page, /style=\{routeNameLabelStyle\(print\)\}/);
   assert.match(page, /route-name-label print-hidden/);
   assert.match(page, /route-name-label route-name-label-print screen-hidden/);
   assert.match(page, /\["routeLabels", "Route bearings & distances"\], \["routeNameLabels", "Named route labels"\]/);
@@ -105,7 +111,7 @@ test("selects complete routes, preserves segment calibration, and anchors screen
   assert.doesNotMatch(page, /route-name-label route-name-label-print screen-hidden\$\{exportClass\(exportSettings\.routeLabels\)\}/);
   assert.match(page, /aria-label=\{`Route \$\{route\.name\}`\}/);
   assert.match(page, /Reference segment/);
-  assert.match(page, /This segment currently measures/);
+  assert.match(page, /Select a segment to establish real-world scale/);
 });
 
 test("keeps all route styling scoped to the Scuba root with mobile and print behavior", async () => {
@@ -125,11 +131,16 @@ test("keeps all route styling scoped to the Scuba root with mobile and print beh
   assert.doesNotMatch(scope.text, /(?:^|\n)\s*(?:html|body)(?:\s|,|\{)/);
 
   assert.match(scope.text, /\.vector-line \{[^}]*height: var\(--route-hit-height/);
+  assert.match(scope.text, /\.route-name-label \{[^}]*transform: translate\(-50%, 18%\) rotate\(var\(--route-name-angle, 0rad\)\);/);
   assert.match(scope.text, /\.route-name-label > span \{[^}]*-webkit-line-clamp: 2;/);
   assert.match(scope.text, /\.route-selection-path \{[^}]*var\(--route-selected-path-width/);
   assert.match(scope.text, /\.route-table-editor \.route-editor/);
+  assert.match(scope.text, /\.survey-drawer/);
+  assert.match(scope.text, /\.survey-tabs/);
+  assert.match(scope.text, /\.survey-route-list/);
   assert.match(scope.text, /@media \(max-width: 767px\)[\s\S]*\.route-table-editor \.route-editor \{ grid-template-columns: 1fr; \}/);
   assert.match(scope.text, /@media \(max-width: 767px\)[\s\S]*\.route-step-list small \{ grid-column: 2; \}/);
   assert.match(scope.text, /@media print[\s\S]*\.route-name-label \{[^}]*var\(--print-route-name-width\)/);
+  assert.match(scope.text, /@media print[\s\S]*\.route-name-label \{[^}]*transform: translate\(-50%, 24%\) rotate\(var\(--route-name-angle, 0rad\)\) !important;/);
   assert.match(scope.text, /@media print[\s\S]*\.route-name-label > span \{[^}]*background: rgba\(253,252,247,\.96\) !important;/);
 });

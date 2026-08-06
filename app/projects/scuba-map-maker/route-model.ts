@@ -15,6 +15,7 @@ export type RouteLabelAnchor = {
   stepIndex: number;
   x: number;
   y: number;
+  angleRadians: number;
   length: number;
   visibleLength: number;
   clipped: boolean;
@@ -526,6 +527,14 @@ function clipLineToRect(start: RoutePoint, end: RoutePoint, rect: RouteRect) {
   };
 }
 
+/** Normalizes a line axis so its label follows the slope without reading upside down. */
+function uprightLineAngle(dx: number, dy: number): number {
+  let angle = Math.atan2(dy, dx);
+  if (angle <= -Math.PI / 2) angle += Math.PI;
+  else if (angle > Math.PI / 2) angle -= Math.PI;
+  return Math.abs(angle) <= 1e-12 ? 0 : angle;
+}
+
 /** Returns the midpoint of the longest full or visibly clipped route segment. */
 export function routeLabelAnchor<P extends RoutePoint, V extends RouteVector>(
   route: SavedRoute,
@@ -558,6 +567,7 @@ export function routeLabelAnchor<P extends RoutePoint, V extends RouteVector>(
       stepIndex,
       x: (visible.start.x + visible.end.x) / 2,
       y: (visible.start.y + visible.end.y) / 2,
+      angleRadians: uprightLineAngle(visible.end.x - visible.start.x, visible.end.y - visible.start.y),
       length,
       visibleLength,
       clipped: visible.clipped,

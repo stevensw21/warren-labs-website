@@ -274,6 +274,7 @@ test("anchors a named route on its longest segment without mutating geometry", (
     stepIndex: 0,
     x: 20,
     y: 0,
+    angleRadians: 0,
     length: 40,
     visibleLength: 40,
     clipped: false,
@@ -293,9 +294,52 @@ test("anchors cropped output on the longest visible clipped segment", () => {
     stepIndex: 1,
     x: 40,
     y: 15,
+    angleRadians: Math.PI / 2,
     length: 30,
     visibleLength: 30,
     clipped: false,
   });
   assert.equal(routeLabelAnchor(saved, points, vectors, { x: 100, y: 100, width: 20, height: 20 }), undefined);
+});
+
+test("keeps route title angles parallel and upright in every direction", () => {
+  const cases = [
+    { end: point("B", 10, 10), expected: Math.PI / 4 },
+    { end: point("B", -10, -10), expected: Math.PI / 4 },
+    { end: point("B", 10, -10), expected: -Math.PI / 4 },
+    { end: point("B", -10, 10), expected: -Math.PI / 4 },
+    { end: point("B", 0, 10), expected: Math.PI / 2 },
+    { end: point("B", 0, -10), expected: Math.PI / 2 },
+    { end: point("B", -10, 0), expected: 0 },
+  ];
+
+  for (const { end, expected } of cases) {
+    const points = [point("A", 0, 0), end];
+    const vectors = [vector("line", "A", "B")];
+    const saved = route("named", "Wall route", [forward("line")]);
+    assert.equal(routeLabelAnchor(saved, points, vectors)?.angleRadians, expected);
+    assert.equal(routeLabelAnchor(reverseRoute(saved), points, vectors)?.angleRadians, expected);
+  }
+});
+
+test("preserves a clipped segment angle and ignores invalid geometry", () => {
+  const points = [point("A", 0, 0), point("B", 40, 40), point("bad", Number.NaN, 4)];
+  const vectors = [vector("diagonal", "A", "B"), vector("invalid", "B", "bad")];
+  const saved = route("named", "Wall route", [forward("diagonal")]);
+
+  assert.deepEqual(routeLabelAnchor(saved, points, vectors, { x: 10, y: 10, width: 20, height: 20 }), {
+    routeId: "named",
+    vectorId: "diagonal",
+    stepIndex: 0,
+    x: 20,
+    y: 20,
+    angleRadians: Math.PI / 4,
+    length: Math.hypot(40, 40),
+    visibleLength: Math.hypot(20, 20),
+    clipped: true,
+  });
+  assert.equal(routeLabelAnchor(route("missing-vector", "Missing", [forward("missing")]), points, vectors), undefined);
+  assert.equal(routeLabelAnchor(route("missing-point", "Missing", [forward("missing-point")]), points, [vector("missing-point", "A", "elsewhere")]), undefined);
+  assert.equal(routeLabelAnchor(route("invalid", "Invalid", [forward("invalid")]), points, vectors), undefined);
+  assert.equal(routeLabelAnchor(route("zero", "Zero", [forward("zero")]), [point("A", 0, 0), point("B", 0, 0)], [vector("zero", "A", "B")]), undefined);
 });
