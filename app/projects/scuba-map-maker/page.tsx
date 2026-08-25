@@ -1,6 +1,7 @@
 "use client";
 
-import { CSSProperties, ChangeEvent, Fragment, KeyboardEvent as ReactKeyboardEvent, PointerEvent, WheelEvent, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { CSSProperties, ChangeEvent, Fragment, KeyboardEvent as ReactKeyboardEvent, PointerEvent, WheelEvent, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { DEFAULT_MAP_PAN, DEFAULT_MAP_ZOOM, fitMapView } from "./map-view";
 import { SoundingsIcon, type SoundingsIconName } from "./soundings-icons";
 import { DEFAULT_POINT_SYMBOL_SCALE, MAX_POINT_SYMBOL_SCALE, MIN_POINT_SYMBOL_SCALE, POINT_SYMBOLS, normalizePointSymbol, normalizePointSymbolScale, pointSymbolDefinition, type PointSymbolId } from "./point-symbols";
 import {
@@ -21,14 +22,13 @@ import {
   type PointLabelOffsets,
 } from "./point-annotations";
 import { layoutPrintCallouts, type PrintRect } from "./print-callouts";
+import { migrateLegacyWaypoints } from "./project-migration";
+import { collapseRouteVertex, deleteRouteSegment, deleteSavedRoute, insertRouteMidpoint, type RouteEditResult } from "./route-editing";
+import { planarizeRouteTopology } from "./route-topology";
 import { buildRouteNetwork, type RoutePath } from "./route-network";
 import {
-  appendVectorToRoute,
-  createRoute,
-  joinRoutes,
   normalizeRoutes,
   reverseRoute,
-  routeEndpointKind,
   routeEndpoints,
   routeForVector,
   routeLabelAnchor,
@@ -40,6 +40,8 @@ import {
 
 type Unit = "ft" | "m" | "mi";
 type Point = { id: string; label: string; name?: string; symbol?: PointSymbolId; x: number; y: number; depth?: number; labelOffsets?: PointLabelOffsets; fieldDraft?: FieldDraft };
+type RouteVertex = { id: string; x: number; y: number };
+type RouteNode = Point | RouteVertex;
 type Vector = { id: string; fromId: string; toId: string; bearing: number; distance: number; unit: Unit };
 type CoastPoint = { id: string; x: number; y: number };
 type PrintArea = { x: number; y: number; width: number; height: number };
@@ -49,21 +51,23 @@ type NamePlacement = "smartCallouts" | "asPositioned";
 type ExportSettings = { reference: boolean; shoreline: boolean; routes: boolean; routeLabels: boolean; routeNameLabels: boolean; pointMarkers: boolean; namedPointMarkersOnly: boolean; pointNames: boolean; fullPointNames: boolean; depths: boolean; contours: boolean; mapFurniture: boolean; pointTable: boolean; namePlacement?: NamePlacement };
 type ExportToggleKey = Exclude<keyof ExportSettings, "namePlacement">;
 type Project = {
-  version: 1; id: string; title: string; date: string; notes: string; distanceUnit: Unit; depthUnit: Unit;
-  coastline: CoastPoint[]; shoreLocked?: boolean; waypoints: Point[]; vectors: Vector[]; routes?: SavedRoute[]; reference: ReferenceImage; calibration?: Calibration; exportSettings?: ExportSettings; printArea?: PrintArea; pointSymbolScale?: number;
+  version: 2; id: string; title: string; date: string; notes: string; distanceUnit: Unit; depthUnit: Unit;
+  coastline: CoastPoint[]; shoreLocked?: boolean; waypoints: Point[]; routeVertices: RouteVertex[]; vectors: Vector[]; routes?: SavedRoute[]; reference: ReferenceImage; calibration?: Calibration; exportSettings?: ExportSettings; printArea?: PrintArea; pointSymbolScale?: number;
 };
+type StoredProject = Omit<Project, "version" | "routeVertices"> & { version: 1 | 2; routeVertices?: RouteVertex[] };
 type ProjectSyncMessage =
-  | { type: "project-update"; source: string; project: Project }
-  | { type: "project-request"; source: string; projectId: string };
-type Tool = "select" | "coast" | "origin" | "point" | "reference" | "printArea";
+  | { type: "project-update"; protocol: 2; source: string; project: Project }
+  | { type: "project-request"; protocol: 2; source: string; projectId: string };
+type Tool = "select" | "coast" | "origin" | "point" | "route" | "reference" | "printArea";
 type ActivePanel = "projects" | "survey" | "settings" | "export" | null;
 type SurveyTab = "routes" | "points";
 type PointFilter = "all" | "named" | "unnamed";
-type SegmentMode = "bearing" | "existing";
 type CaptureImportReview = { packageValue: FieldCapturePackage; additions: CapturedPoint[]; conflicts: CapturedPoint[] };
 type LayerVisibility = { shoreline: boolean; routes: boolean; routeLabels: boolean; pointNames: boolean; names: boolean; depths: boolean; contours: boolean; mapFurniture: boolean };
 type PrintAreaHandle = "move" | "nw" | "ne" | "se" | "sw";
-type Drag = { kind: "waypoint" | "annotation" | "coast" | "pan" | "reference" | "printAreaDraw" | "printAreaAdjust"; id?: string; annotationKind?: PointAnnotationKind; offset?: LabelOffset; initialOffset?: LabelOffset; hadOffset?: boolean; moved?: boolean; changed?: boolean; originX?: number; originY?: number; start: Project; x: number; y: number; point?: { x: number; y: number }; area?: PrintArea; handle?: PrintAreaHandle };
+type Drag = { kind: "waypoint" | "routeVertex" | "annotation" | "coast" | "pan" | "reference" | "printAreaDraw" | "printAreaAdjust"; id?: string; annotationKind?: PointAnnotationKind; offset?: LabelOffset; initialOffset?: LabelOffset; hadOffset?: boolean; moved?: boolean; changed?: boolean; originX?: number; originY?: number; start: Project; x: number; y: number; point?: { x: number; y: number }; area?: PrintArea; handle?: PrintAreaHandle };
+type DraftRoutePoint = { x: number; y: number; nodeId?: string };
+type RouteDraft = { points: DraftRoutePoint[]; name: string; extendRouteId?: string; extendAt?: "start" | "end" };
 
 const DB_NAME = "dive-map-builder";
 const STORE_NAME = "projects";
@@ -83,8 +87,8 @@ const id = () => (typeof crypto !== "undefined" && crypto.randomUUID ? crypto.ra
 const round = (value: number, precision = 2) => Math.round(value * 10 ** precision) / 10 ** precision;
 const formatNumber = (value: number) => new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(value);
 const emptyProject = (title = "Untitled dive site"): Project => ({
-  version: 1, id: id(), title, date: new Date().toISOString().slice(0, 10), notes: "", distanceUnit: "ft", depthUnit: "ft",
-  coastline: [], shoreLocked: false, waypoints: [], vectors: [], routes: [], calibration: { metersPerPixel: DEFAULT_METERS_PER_PIXEL }, exportSettings: { ...DEFAULT_EXPORT_SETTINGS },
+  version: 2, id: id(), title, date: new Date().toISOString().slice(0, 10), notes: "", distanceUnit: "ft", depthUnit: "ft",
+  coastline: [], shoreLocked: false, waypoints: [], routeVertices: [], vectors: [], routes: [], calibration: { metersPerPixel: DEFAULT_METERS_PER_PIXEL }, exportSettings: { ...DEFAULT_EXPORT_SETTINGS },
   pointSymbolScale: DEFAULT_POINT_SYMBOL_SCALE,
   reference: { opacity: 0.48, scale: 1, x: 0, y: 0, visible: true, locked: false },
 });
@@ -97,6 +101,15 @@ function eventualFieldDraftSummary(draft: FieldDraft | undefined, fallbackUnit: 
   return measurements || draft.note || "Point metadata differs from the desktop copy.";
 }
 function hasDescriptiveName(point: Point) { return Boolean(point.name?.trim()); }
+function isPoint(node: RouteNode | undefined): node is Point { return Boolean(node && "label" in node); }
+function routeNodes(project: Pick<Project, "waypoints" | "routeVertices">): RouteNode[] { return [...project.waypoints, ...project.routeVertices]; }
+function nodeLabel(node: RouteNode | undefined, fallback = "Route vertex") { return isPoint(node) ? node.label : fallback; }
+function nextPointLabel(points: readonly Point[]) {
+  const labels = new Set(points.map((point) => point.label.toLowerCase()));
+  let number = 1;
+  while (labels.has(`p${number}`)) number += 1;
+  return `P${number}`;
+}
 function normalizePrintArea(area?: Partial<PrintArea>): PrintArea | undefined {
   if (!area || !Number.isFinite(area.x) || !Number.isFinite(area.y) || !Number.isFinite(area.width) || !Number.isFinite(area.height)) return undefined;
   const { x, y, width, height } = area as PrintArea;
@@ -109,6 +122,16 @@ function normalizePrintArea(area?: Partial<PrintArea>): PrintArea | undefined {
 }
 function printAreaFromPoints(start: { x: number; y: number }, end: { x: number; y: number }) { return normalizePrintArea({ x: start.x, y: start.y, width: end.x - start.x, height: end.y - start.y }); }
 function pointInPrintArea(point: Point, area?: PrintArea) { return !area || (point.x >= area.x && point.x <= area.x + area.width && point.y >= area.y && point.y <= area.y + area.height); }
+function projectedPointOnSegment(point: { x: number; y: number }, start: { x: number; y: number }, end: { x: number; y: number }) {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const lengthSquared = dx * dx + dy * dy;
+  if (lengthSquared === 0) return { x: start.x, y: start.y, t: 0, distance: Math.hypot(point.x - start.x, point.y - start.y) };
+  const t = Math.max(0, Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared));
+  const x = start.x + dx * t;
+  const y = start.y + dy * t;
+  return { x, y, t, distance: Math.hypot(point.x - x, point.y - y) };
+}
 function projectPrintSource(source: PrintRect, viewport: PrintRect) {
   const scale = Math.min(viewport.width / source.width, viewport.height / source.height);
   const renderedWidth = source.width * scale;
@@ -125,12 +148,13 @@ function projectPrintSource(source: PrintRect, viewport: PrintRect) {
 }
 function mapScale(project: Project) { return project.calibration?.metersPerPixel && project.calibration.metersPerPixel > 0 ? project.calibration.metersPerPixel : DEFAULT_METERS_PER_PIXEL; }
 function geometry(project: Project, vector: Vector) {
-  const start = project.waypoints.find((point) => point.id === vector.fromId);
-  const end = project.waypoints.find((point) => point.id === vector.toId);
+  const nodes = routeNodes(project);
+  const start = nodes.find((point) => point.id === vector.fromId);
+  const end = nodes.find((point) => point.id === vector.toId);
   if (!start || !end) return null;
   return { start, end, dx: end.x - start.x, dy: end.y - start.y, pixels: Math.hypot(end.x - start.x, end.y - start.y) };
 }
-function routePathData(path: RoutePath, pointById: ReadonlyMap<string, Point>) {
+function routePathData(path: RoutePath, pointById: ReadonlyMap<string, RouteNode>) {
   const commands = path.pointIds.map((pointId, index) => {
     const point = pointById.get(pointId);
     return point ? `${index ? "L" : "M"}${point.x} ${point.y}` : "";
@@ -166,6 +190,42 @@ function synchronizeVectors(project: Project) {
   });
   return project;
 }
+function reconcileRouteTopology(project: Project): Project {
+  const calibratedVectorId = project.calibration?.vectorId;
+  const calibratedVectorBefore = calibratedVectorId ? project.vectors.find((vector) => vector.id === calibratedVectorId) : undefined;
+  const planarized = planarizeRouteTopology(project.waypoints, project.routeVertices, project.vectors, project.routes ?? [], { epsilon: 1e-6, createId: () => id() });
+  project.waypoints = planarized.points;
+  project.routeVertices = planarized.routeVertices;
+  project.vectors = planarized.vectors;
+  project.routes = normalizeRoutes(routeNodes(project), project.vectors, planarized.routes, { createId: id });
+  const calibratedVectorAfter = calibratedVectorId ? project.vectors.find((vector) => vector.id === calibratedVectorId) : undefined;
+  if (calibratedVectorId && (
+    planarized.splitVectorIds.includes(calibratedVectorId)
+    || !calibratedVectorAfter
+    || Boolean(calibratedVectorBefore && (calibratedVectorBefore.fromId !== calibratedVectorAfter.fromId || calibratedVectorBefore.toId !== calibratedVectorAfter.toId))
+  )) {
+    project.calibration = { metersPerPixel: mapScale(project) };
+  }
+  return synchronizeVectors(project);
+}
+function applyRouteEditResult(project: Project, result: RouteEditResult<Point, RouteVertex, Vector, SavedRoute>): Project {
+  if (!result.ok) return project;
+  const calibratedVectorId = project.calibration?.vectorId;
+  const calibratedVectorBefore = calibratedVectorId ? project.vectors.find((vector) => vector.id === calibratedVectorId) : undefined;
+  const calibratedVectorAfter = calibratedVectorId ? result.vectors.find((vector) => vector.id === calibratedVectorId) : undefined;
+  const calibratedVectorChanged = calibratedVectorId && (
+    result.splitVectorIds.includes(calibratedVectorId)
+    || result.removedVectorIds.includes(calibratedVectorId)
+    || !calibratedVectorAfter
+    || Boolean(calibratedVectorBefore && (calibratedVectorBefore.fromId !== calibratedVectorAfter.fromId || calibratedVectorBefore.toId !== calibratedVectorAfter.toId))
+  );
+  project.waypoints = result.points;
+  project.routeVertices = result.routeVertices;
+  project.vectors = result.vectors;
+  project.routes = result.routes;
+  if (calibratedVectorChanged) project.calibration = { metersPerPixel: mapScale(project) };
+  return synchronizeVectors(project);
+}
 function normalizePointAnnotationOffsets(point: Point) {
   const normalized = normalizeLabelOffsets(point.labelOffsets);
   if (!normalized) { delete point.labelOffsets; return point; }
@@ -174,16 +234,42 @@ function normalizePointAnnotationOffsets(point: Point) {
   point.labelOffsets = normalized;
   return point;
 }
-function normalizeProject(raw: Project): Project {
-  const project = clone(raw);
-  project.version = 1;
+function normalizeProject(raw: StoredProject | Project): Project {
+  const stored = clone(raw) as StoredProject;
+  const storedWaypoints = Array.isArray(stored.waypoints) ? stored.waypoints : [];
+  const storedVectors = Array.isArray(stored.vectors) ? stored.vectors : [];
+  const storedRouteVertices = Array.isArray(stored.routeVertices) ? stored.routeVertices : [];
+  const fallback = emptyProject(typeof stored.title === "string" && stored.title.trim() ? stored.title : "Imported dive site");
+  const legacyMigration = stored.version === 1
+    ? migrateLegacyWaypoints(storedWaypoints, storedVectors)
+    : { waypoints: storedWaypoints, routeVertices: storedRouteVertices, convertedPointIds: [] };
+  const pointIds = new Set(legacyMigration.waypoints.map((point) => point.id));
+  const routeVertexIds = new Set<string>();
+  const project = {
+    ...fallback,
+    ...stored,
+    version: 2,
+    waypoints: legacyMigration.waypoints,
+    routeVertices: legacyMigration.routeVertices.filter((vertex) => {
+      if (!vertex || typeof vertex.id !== "string" || pointIds.has(vertex.id) || routeVertexIds.has(vertex.id) || !Number.isFinite(vertex.x) || !Number.isFinite(vertex.y)) return false;
+      routeVertexIds.add(vertex.id);
+      return true;
+    }),
+  } as Project;
+  project.id = typeof project.id === "string" && project.id ? project.id : fallback.id;
+  project.title = typeof project.title === "string" && project.title.trim() ? project.title : fallback.title;
+  project.date = typeof project.date === "string" && project.date ? project.date : fallback.date;
+  project.notes = typeof project.notes === "string" ? project.notes : "";
+  project.distanceUnit = project.distanceUnit in METERS_PER_UNIT ? project.distanceUnit : "ft";
+  project.depthUnit = project.depthUnit in METERS_PER_UNIT ? project.depthUnit : "ft";
+  project.coastline = Array.isArray(project.coastline) ? project.coastline : [];
   const savedReference = project.reference ?? ({} as Partial<ReferenceImage>);
   project.reference = { dataUrl: savedReference.dataUrl, opacity: savedReference.opacity ?? 0.48, scale: savedReference.scale ?? 1, x: savedReference.x ?? 0, y: savedReference.y ?? 0, visible: savedReference.visible ?? true, locked: savedReference.locked ?? false };
   project.waypoints = (project.waypoints ?? []).map((point) => {
     return normalizePointAnnotationOffsets({ ...point, name: point.name ?? "", symbol: normalizePointSymbol(point.symbol) });
   });
-  project.vectors = (project.vectors ?? []).map((vector) => ({ ...vector, unit: METERS_PER_UNIT[vector.unit] ? vector.unit : project.distanceUnit }));
-  project.routes = normalizeRoutes(project.waypoints, project.vectors, project.routes, { createId: id });
+  project.vectors = storedVectors.map((vector) => ({ ...vector, unit: METERS_PER_UNIT[vector.unit] ? vector.unit : project.distanceUnit }));
+  project.routes = normalizeRoutes(routeNodes(project), project.vectors, Array.isArray(project.routes) ? project.routes : [], { createId: id });
   project.shoreLocked = project.shoreLocked ?? false;
   const savedExportSettings = project.exportSettings ?? DEFAULT_EXPORT_SETTINGS;
   const namePlacement: NamePlacement = savedExportSettings.namePlacement === "asPositioned" ? "asPositioned" : "smartCallouts";
@@ -192,7 +278,7 @@ function normalizeProject(raw: Project): Project {
   project.printArea = normalizePrintArea(project.printArea);
   project.calibration = { ...project.calibration, metersPerPixel: mapScale(project) };
   project.pointSymbolScale = normalizePointSymbolScale(project.pointSymbolScale);
-  return synchronizeVectors(project);
+  return reconcileRouteTopology(project);
 }
 function niceDistance(value: number) {
   if (!Number.isFinite(value) || value <= 0) return 1;
@@ -220,7 +306,7 @@ async function readProjects(): Promise<Project[]> {
   const database = await openDatabase();
   return new Promise((resolve, reject) => {
     const request = database.transaction(STORE_NAME, "readonly").objectStore(STORE_NAME).getAll();
-    request.onsuccess = () => { database.close(); resolve((request.result as Project[]).map(normalizeProject)); };
+    request.onsuccess = () => { database.close(); resolve((request.result as StoredProject[]).map(normalizeProject)); };
     request.onerror = () => { database.close(); reject(request.error); };
   });
 }
@@ -246,7 +332,7 @@ function RailButton({ active, icon, label, onClick }: { active?: boolean; icon: 
 }
 
 function DockButton({ active, disabled, icon, label, onClick }: { active?: boolean; disabled?: boolean; icon: SoundingsIconName; label: string; onClick: () => void }) {
-  return <button className={`dock-button${active ? " active" : ""}`} aria-pressed={active} disabled={disabled} onClick={onClick}><SoundingsIcon name={icon}/><span>{label}</span></button>;
+  return <button className={`dock-button${active ? " active" : ""}`} aria-label={label} aria-pressed={active} disabled={disabled} onClick={onClick}><SoundingsIcon name={icon}/><span>{label}</span></button>;
 }
 
 function PanelHeading({ icon, title, onClose }: { icon?: SoundingsIconName; title: string; onClose: () => void }) {
@@ -306,12 +392,14 @@ export default function ScubaMapMaker() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedVectorId, setSelectedVectorId] = useState<string | null>(null);
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
-  const [zoom, setZoom] = useState(0.78);
-  const [pan, setPan] = useState({ x: 22, y: 24 });
+  const [zoom, setZoom] = useState(DEFAULT_MAP_ZOOM);
+  const [pan, setPan] = useState(() => ({ ...DEFAULT_MAP_PAN }));
   const [undoStack, setUndoStack] = useState<Project[]>([]);
   const [redoStack, setRedoStack] = useState<Project[]>([]);
-  const [vectorForm, setVectorForm] = useState({ bearing: "0", distance: "30", label: "", depth: "", routeId: "new", routeName: "" });
-  const [connectRouteByPoint, setConnectRouteByPoint] = useState<Record<string, string>>({});
+  const [routeDraft, setRouteDraft] = useState<RouteDraft | null>(null);
+  const [routeDraftPointer, setRouteDraftPointer] = useState<DraftRoutePoint | null>(null);
+  const [selectedRouteVertexId, setSelectedRouteVertexId] = useState<string | null>(null);
+  const [pendingDeletePointId, setPendingDeletePointId] = useState<string | null>(null);
   const [calibrationForm, setCalibrationForm] = useState({ distance: "", unit: "ft" as Unit });
   const [notice, setNotice] = useState("Loading local map library…");
   const [activePanel, setActivePanel] = useState<ActivePanel>(null);
@@ -319,8 +407,6 @@ export default function ScubaMapMaker() {
   const [pointFilter, setPointFilter] = useState<PointFilter>("all");
   const [pointSearch, setPointSearch] = useState("");
   const deferredPointSearch = useDeferredValue(pointSearch.trim().toLowerCase());
-  const [segmentMode, setSegmentMode] = useState<SegmentMode>("bearing");
-  const [segmentTargetId, setSegmentTargetId] = useState("");
   const [captureImportReview, setCaptureImportReview] = useState<CaptureImportReview | null>(null);
   const [captureConflictIds, setCaptureConflictIds] = useState<Set<string>>(() => new Set());
   const [layersOpen, setLayersOpen] = useState(false);
@@ -332,10 +418,31 @@ export default function ScubaMapMaker() {
   const drag = useRef<Drag | null>(null);
   const panRef = useRef(pan);
   const zoomRef = useRef(zoom);
+  const autoFitRef = useRef(true);
   const syncChannel = useRef<BroadcastChannel | null>(null);
   const pointTableWindow = useRef<Window | null>(null);
   const projectRef = useRef<Project | null>(null);
   const windowId = useRef(id());
+
+  const fitMapToStage = useCallback(() => {
+    const stage = stageRef.current;
+    if (!stage) return;
+    autoFitRef.current = true;
+    const bounds = stage.getBoundingClientRect();
+    const view = fitMapView(bounds.width, bounds.height, CANVAS.width, CANVAS.height);
+    panRef.current = view.pan;
+    zoomRef.current = view.zoom;
+    setPan(view.pan);
+    setZoom(view.zoom);
+  }, []);
+  const changeMapZoom = useCallback((factor: number) => {
+    autoFitRef.current = false;
+    setZoom((current) => {
+      const next = Math.max(0.1, current * factor);
+      zoomRef.current = next;
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     const requestedProjectId = new URLSearchParams(window.location.search).get("point-table");
@@ -350,8 +457,25 @@ export default function ScubaMapMaker() {
     }).catch(() => { const fresh = emptyProject("Beaver Lake dive map"); projectRef.current = fresh; setProject(fresh); setProjects([fresh]); setReady(true); setNotice("Working in this browser session."); });
   }, []);
   useEffect(() => {
+    if (!ready || pointTableOnly) return;
+    let frame = 0;
+    const refit = () => {
+      if (!autoFitRef.current) return;
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(fitMapToStage);
+    };
+    refit();
+    window.addEventListener("resize", refit);
+    window.visualViewport?.addEventListener("resize", refit);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("resize", refit);
+      window.visualViewport?.removeEventListener("resize", refit);
+    };
+  }, [fitMapToStage, pointTableOnly, ready]);
+  useEffect(() => {
     const receiveProject = (message: ProjectSyncMessage) => {
-      if (message.type !== "project-update" || message.source === windowId.current) return;
+      if (message.protocol !== 2 || message.type !== "project-update" || message.source === windowId.current) return;
       const incoming = normalizeProject(message.project);
       setProjects((items) => [incoming, ...items.filter((item) => item.id !== incoming.id)]);
       setProject((current) => {
@@ -361,13 +485,13 @@ export default function ScubaMapMaker() {
       });
     };
     const receiveWindowSync = (event: globalThis.MessageEvent<ProjectSyncMessage>) => {
-      if (event.origin !== window.location.origin || !event.data || event.data.source === windowId.current) return;
+      if (event.origin !== window.location.origin || !event.data || event.data.protocol !== 2 || event.data.source === windowId.current) return;
       if (event.data.type === "project-request") {
         if (pointTableOnly || !event.source) return;
         const target = event.source as Window;
         pointTableWindow.current = target;
         const current = projectRef.current;
-        if (current?.id === event.data.projectId) target.postMessage({ type: "project-update", source: windowId.current, project: current } satisfies ProjectSyncMessage, window.location.origin);
+        if (current?.id === event.data.projectId) target.postMessage({ type: "project-update", protocol: 2, source: windowId.current, project: current } satisfies ProjectSyncMessage, window.location.origin);
         return;
       }
       if (!pointTableOnly && event.source) pointTableWindow.current = event.source as Window;
@@ -375,7 +499,7 @@ export default function ScubaMapMaker() {
     };
     window.addEventListener("message", receiveWindowSync);
     if (typeof BroadcastChannel !== "undefined") {
-      const channel = new BroadcastChannel("soundings-project-sync");
+      const channel = new BroadcastChannel("soundings-project-sync-v2");
       syncChannel.current = channel;
       channel.onmessage = (event: MessageEvent<ProjectSyncMessage>) => receiveProject(event.data);
     }
@@ -383,7 +507,7 @@ export default function ScubaMapMaker() {
   }, [pointTableOnly, pointTableProjectId]);
   useEffect(() => {
     if (!ready || !pointTableProjectId || !window.opener) return;
-    window.opener.postMessage({ type: "project-request", source: windowId.current, projectId: pointTableProjectId } satisfies ProjectSyncMessage, window.location.origin);
+    window.opener.postMessage({ type: "project-request", protocol: 2, source: windowId.current, projectId: pointTableProjectId } satisfies ProjectSyncMessage, window.location.origin);
   }, [pointTableProjectId, ready]);
   useEffect(() => {
     if (!ready || !project) return;
@@ -398,7 +522,7 @@ export default function ScubaMapMaker() {
   useEffect(() => { zoomRef.current = zoom; }, [zoom]);
   useEffect(() => {
     const panWithArrowKeys = (event: KeyboardEvent) => {
-      if (event.key === "Escape") { setActivePanel(null); setSelectedId(null); setSelectedVectorId(null); setSelectedRouteId(null); return; }
+      if (event.key === "Escape") { setRouteDraft(null); setRouteDraftPointer(null); setTool("select"); setActivePanel(null); setSelectedId(null); setSelectedVectorId(null); setSelectedRouteId(null); setSelectedRouteVertexId(null); return; }
       const target = event.target;
       if (target instanceof HTMLElement && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName))) return;
       const step = event.shiftKey ? 180 : 60;
@@ -408,6 +532,7 @@ export default function ScubaMapMaker() {
       const offset = offsets[event.key];
       if (!offset) return;
       event.preventDefault();
+      autoFitRef.current = false;
       const next = { x: panRef.current.x + offset.x, y: panRef.current.y + offset.y };
       panRef.current = next;
       setPan(next);
@@ -419,6 +544,7 @@ export default function ScubaMapMaker() {
     const continuePan = (event: globalThis.PointerEvent) => {
       const activeDrag = drag.current;
       if (!activeDrag || activeDrag.kind !== "pan") return;
+      autoFitRef.current = false;
       const next = { x: panRef.current.x + event.clientX - activeDrag.x, y: panRef.current.y + event.clientY - activeDrag.y };
       activeDrag.x = event.clientX;
       activeDrag.y = event.clientY;
@@ -433,6 +559,8 @@ export default function ScubaMapMaker() {
   }, []);
 
   const selected = project?.waypoints.find((point) => point.id === selectedId) ?? null;
+  const pendingDeletePoint = project?.waypoints.find((point) => point.id === pendingDeletePointId) ?? null;
+  const selectedRouteVertex = project?.routeVertices.find((vertex) => vertex.id === selectedRouteVertexId) ?? null;
   const selectedVector = project?.vectors.find((vector) => vector.id === selectedVectorId) ?? null;
   const routes = project?.routes ?? [];
   const selectedRoute = routes.find((route) => route.id === selectedRouteId)
@@ -440,7 +568,8 @@ export default function ScubaMapMaker() {
     ?? null;
   const depthPoints = useMemo(() => (project?.waypoints.filter((point) => point.depth !== undefined) ?? []), [project]);
   const pointMap = useMemo(() => new Map(project?.waypoints.map((point) => [point.id, point]) ?? []), [project]);
-  const visualRouteNetwork = useMemo(() => project ? buildRouteNetwork(project.waypoints, project.vectors) : { paths: [], branchPointIds: [] }, [project]);
+  const nodeMap = useMemo(() => new Map(project ? routeNodes(project).map((point) => [point.id, point]) : []), [project]);
+  const visualRouteNetwork = useMemo(() => project ? buildRouteNetwork(routeNodes(project), project.vectors) : { paths: [], branchPointIds: [] }, [project]);
 
   const update = (next: Project, record = true) => {
     if (!project) return;
@@ -448,7 +577,7 @@ export default function ScubaMapMaker() {
     setSaveState("Saving…");
     projectRef.current = next;
     setProject(next);
-    const message = { type: "project-update", source: windowId.current, project: next } satisfies ProjectSyncMessage;
+    const message = { type: "project-update", protocol: 2, source: windowId.current, project: next } satisfies ProjectSyncMessage;
     syncChannel.current?.postMessage(message);
     const directTarget = pointTableOnly ? window.opener : pointTableWindow.current;
     if (directTarget && !directTarget.closed) directTarget.postMessage(message, window.location.origin);
@@ -456,10 +585,6 @@ export default function ScubaMapMaker() {
   const mutate = (fn: (current: Project) => Project, record = true) => project && update(fn(clone(project)), record);
   const routeFallbackName = (route: SavedRoute) => `Unnamed route ${Math.max(1, routes.findIndex((item) => item.id === route.id) + 1)}`;
   const routeDisplayName = (route: SavedRoute) => route.name.trim() || routeFallbackName(route);
-  const eligibleRoutesAtPoint = (pointId: string) => routes.filter((route) => {
-    const endpoints = routeEndpoints(route, project?.vectors ?? []);
-    return Boolean(endpoints && !endpoints.closed && endpoints.endId === pointId);
-  });
   const focusRoute = (route: SavedRoute, openDrawer = true, vectorId?: string) => {
     setSelectedRouteId(route.id);
     const nextVectorId = vectorId && route.steps.some((step) => step.vectorId === vectorId) ? vectorId : route.steps[0]?.vectorId;
@@ -470,7 +595,9 @@ export default function ScubaMapMaker() {
     }
     if (openDrawer) {
       const endpoints = routeEndpoints(route, project?.vectors ?? []);
-      setSelectedId(endpoints?.endId ?? null);
+      const endNode = endpoints ? nodeMap.get(endpoints.endId) : undefined;
+      setSelectedId(isPoint(endNode) ? endNode.id : null);
+      setSelectedRouteVertexId(endNode && !isPoint(endNode) ? endNode.id : null);
       setSurveyTab("routes");
       setActivePanel("survey");
     }
@@ -501,10 +628,6 @@ export default function ScubaMapMaker() {
     });
     setNotice(symbol ? `${pointSymbolDefinition(symbol).label} marker selected.` : "Circle marker selected.");
   };
-  const possibleNextPoints = (current: Project, fromId: string, vectorId?: string) => current.waypoints.filter((candidate) => {
-    if (candidate.id === fromId) return false;
-    return !current.vectors.some((vector) => vector.fromId === fromId && vector.toId === candidate.id && vector.id !== vectorId);
-  });
   const undo = () => {
     if (!project || !undoStack.length) return;
     const previous = undoStack[undoStack.length - 1]; setUndoStack((items) => items.slice(0, -1)); setRedoStack((items) => [...items, clone(project)]); update(previous, false); setNotice("Undid last map edit.");
@@ -516,6 +639,23 @@ export default function ScubaMapMaker() {
   const canvasPosition = (event: PointerEvent<HTMLElement>) => {
     const rect = stageRef.current!.getBoundingClientRect();
     return { x: Math.max(0, Math.min(CANVAS.width, (event.clientX - rect.left - pan.x) / zoom)), y: Math.max(0, Math.min(CANVAS.height, (event.clientY - rect.top - pan.y) / zoom)) };
+  };
+  const snapRoutePoint = (current: Project, position: { x: number; y: number }): DraftRoutePoint => {
+    const threshold = 18 / zoom;
+    const nearbyNode = routeNodes(current)
+      .map((node) => ({ node, distance: Math.hypot(node.x - position.x, node.y - position.y) }))
+      .filter(({ distance }) => distance <= threshold)
+      .sort((left, right) => left.distance - right.distance)[0]?.node;
+    if (nearbyNode) return { x: nearbyNode.x, y: nearbyNode.y, nodeId: nearbyNode.id };
+
+    const nodeById = new Map(routeNodes(current).map((node) => [node.id, node]));
+    const projection = current.vectors.flatMap((vector) => {
+      const start = nodeById.get(vector.fromId);
+      const end = nodeById.get(vector.toId);
+      if (!start || !end) return [];
+      return [projectedPointOnSegment(position, start, end)];
+    }).filter((candidate) => candidate.distance <= threshold).sort((left, right) => left.distance - right.distance)[0];
+    return projection ? { x: projection.x, y: projection.y } : position;
   };
   const annotationOffsetFromElement = (element: HTMLElement, point: Point) => {
     const stageRect = stageRef.current!.getBoundingClientRect();
@@ -534,6 +674,48 @@ export default function ScubaMapMaker() {
     point.x = x; point.y = y;
     return synchronizeVectors(current);
   };
+  const moveRouteVertex = (current: Project, vertexId: string, x: number, y: number) => {
+    const vertex = current.routeVertices.find((item) => item.id === vertexId); if (!vertex) return current;
+    vertex.x = x; vertex.y = y;
+    return synchronizeVectors(current);
+  };
+  const addPointOfInterest = (position: { x: number; y: number }, requestedLabel?: "A0") => {
+    if (!project) return;
+    const snapped = snapRoutePoint(project, position);
+    const existingPoint = snapped.nodeId ? project.waypoints.find((point) => point.id === snapped.nodeId) : undefined;
+    if (existingPoint) {
+      if (requestedLabel === "A0") {
+        mutate((current) => {
+          const point = current.waypoints.find((item) => item.id === existingPoint.id);
+          if (point) { point.label = "A0"; if (!point.name?.trim()) point.name = "Origin"; }
+          return reconcileRouteTopology(current);
+        });
+        setSelectedId(existingPoint.id);
+        setNotice("The existing point is now the required A0 origin.");
+      } else {
+        setSelectedId(existingPoint.id);
+        setSurveyTab("points");
+        setActivePanel("survey");
+        setNotice(`${existingPoint.label} is already attached at that route location.`);
+      }
+      return;
+    }
+
+    const pointId = snapped.nodeId ?? id();
+    const label = requestedLabel ?? nextPointLabel(project.waypoints);
+    mutate((current) => {
+      const promotedVertex = current.routeVertices.find((vertex) => vertex.id === pointId);
+      current.routeVertices = current.routeVertices.filter((vertex) => vertex.id !== pointId);
+      current.waypoints.push({ id: pointId, label, name: requestedLabel ? "Origin" : "", x: promotedVertex?.x ?? snapped.x, y: promotedVertex?.y ?? snapped.y });
+      return reconcileRouteTopology(current);
+    });
+    setSelectedId(pointId);
+    setSelectedRouteVertexId(null);
+    setTool("select");
+    setSurveyTab("points");
+    setActivePanel("survey");
+    setNotice(snapped.nodeId ? `${label} added by promoting the route vertex to a point of interest.` : `${label} added and attached to any route at that location.`);
+  };
   const onStagePointerDown = (event: PointerEvent<HTMLDivElement>) => {
     if (!project || event.button !== 0) return;
     if (drag.current) return;
@@ -545,12 +727,25 @@ export default function ScubaMapMaker() {
     if (tool === "printArea") { event.preventDefault(); drag.current = { kind: "printAreaDraw", start: clone(project), x: event.clientX, y: event.clientY, point: position }; mutate((current) => { current.printArea = { x: position.x, y: position.y, width: 12, height: 12 }; return current; }, false); event.currentTarget.setPointerCapture(event.pointerId); return; }
     if (tool === "coast" && project.shoreLocked) { setTool("select"); setNotice("The shoreline is locked. Unlock it to draw or adjust the coast."); return; }
     if (tool === "coast") { mutate((current) => { current.coastline.push({ id: id(), ...position }); return current; }); setNotice("Shoreline vertex added. Keep clicking to trace the coast."); return; }
-    if (tool === "origin" && !project.waypoints.some((point) => point.label === "A0")) { mutate((current) => { current.waypoints.push({ id: id(), label: "A0", name: "Origin", ...position }); return current; }); setTool("select"); setNotice("A0 established. Pan empty water with a left-drag."); return; }
-    if (tool === "point") { const label = `P${project.waypoints.filter((point) => point.label.startsWith("P")).length + 1}`; mutate((current) => { current.waypoints.push({ id: id(), label, name: "", ...position }); return current; }); setTool("select"); setNotice(`${label} added. Use the point table to name or connect it.`); return; }
+    if (tool === "route") {
+      const snapped = snapRoutePoint(project, position);
+      setRouteDraft((draft) => {
+        const next = draft ?? { points: [], name: "" };
+        const previous = next.points[next.points.length - 1];
+        if (previous && (previous.nodeId && previous.nodeId === snapped.nodeId || Math.hypot(previous.x - snapped.x, previous.y - snapped.y) <= 1e-6)) return next;
+        return { ...next, points: [...next.points, snapped] };
+      });
+      setRouteDraftPointer(snapped);
+      return;
+    }
+    if (tool === "origin" && !project.waypoints.some((point) => point.label === "A0")) { addPointOfInterest(position, "A0"); return; }
+    if (tool === "point") { addPointOfInterest(position); return; }
     if (tool === "origin") setNotice("A0 already exists. Select it from the map or point table.");
   };
   const onStagePointerMove = (event: PointerEvent<HTMLDivElement>) => {
-    if (!project || !drag.current) return;
+    if (!project) return;
+    if (tool === "route" && routeDraft) setRouteDraftPointer(snapRoutePoint(project, canvasPosition(event)));
+    if (!drag.current) return;
     const activeDrag = drag.current;
     if (activeDrag.kind === "pan") return;
     if (activeDrag.kind === "reference") { const dx = (event.clientX - activeDrag.x) / zoom; const dy = (event.clientY - activeDrag.y) / zoom; mutate((current) => { current.reference.x += dx; current.reference.y += dy; return current; }, false); activeDrag.x = event.clientX; activeDrag.y = event.clientY; return; }
@@ -593,7 +788,14 @@ export default function ScubaMapMaker() {
       if (next) mutate((current) => { current.printArea = next; return current; }, false);
       return;
     }
-    if (activeDrag.kind === "waypoint" && activeDrag.id) mutate((current) => movePoint(current, activeDrag.id!, position.x, position.y), false);
+    if (activeDrag.kind === "waypoint" && activeDrag.id) {
+      const point = project.waypoints.find((item) => item.id === activeDrag.id);
+      if (point && Math.hypot(point.x - position.x, point.y - position.y) > 1e-6) { activeDrag.changed = true; mutate((current) => movePoint(current, activeDrag.id!, position.x, position.y), false); }
+    }
+    if (activeDrag.kind === "routeVertex" && activeDrag.id) {
+      const vertex = project.routeVertices.find((item) => item.id === activeDrag.id);
+      if (vertex && Math.hypot(vertex.x - position.x, vertex.y - position.y) > 1e-6) { activeDrag.changed = true; mutate((current) => moveRouteVertex(current, activeDrag.id!, position.x, position.y), false); }
+    }
     if (activeDrag.kind === "coast" && activeDrag.id) mutate((current) => { const vertex = current.coastline.find((item) => item.id === activeDrag.id); if (vertex) Object.assign(vertex, position); return current; }, false);
   };
   const onStagePointerUp = () => {
@@ -617,12 +819,15 @@ export default function ScubaMapMaker() {
       }
     }
     if (kind === "annotation" && !changed) return;
+    if ((kind === "waypoint" || kind === "routeVertex") && !changed) return;
+    if (kind === "waypoint" || kind === "routeVertex") mutate((current) => reconcileRouteTopology(current), false);
     if (kind !== "pan") { setUndoStack((items) => [...items.slice(-29), original]); setRedoStack([]); }
     if (kind === "printAreaDraw") { setTool("select"); setNotice("Print area set. Drag its center or corners to refine it, then print the selected area."); }
     if (kind === "annotation") setNotice("Label position saved. Use the point inspector to reset it.");
   };
   const onStageWheel = (event: WheelEvent<HTMLDivElement>) => {
     event.preventDefault();
+    autoFitRef.current = false;
     const rect = event.currentTarget.getBoundingClientRect();
     const currentZoom = zoomRef.current;
     const nextZoom = Math.max(0.1, currentZoom * (event.deltaY < 0 ? 1.15 : 1 / 1.15));
@@ -634,8 +839,9 @@ export default function ScubaMapMaker() {
     setZoom(nextZoom);
     setPan(nextPan);
   };
-  const startDrag = (event: PointerEvent<HTMLButtonElement>, kind: "waypoint" | "coast", itemId: string) => {
-    event.stopPropagation(); if (!project || (kind === "coast" && project.shoreLocked)) return; event.currentTarget.setPointerCapture(event.pointerId); drag.current = { kind, id: itemId, start: clone(project), x: event.clientX, y: event.clientY }; setSelectedId(kind === "waypoint" ? itemId : null); setSelectedVectorId(null); setSelectedRouteId(null); setActivePanel(null); setTool("select");
+  const startDrag = (event: PointerEvent<HTMLButtonElement>, kind: "waypoint" | "routeVertex" | "coast", itemId: string) => {
+    event.stopPropagation(); if (!project || (kind === "coast" && project.shoreLocked)) return; event.currentTarget.setPointerCapture(event.pointerId); drag.current = { kind, id: itemId, start: clone(project), x: event.clientX, y: event.clientY }; setSelectedId(kind === "waypoint" ? itemId : null); setSelectedVectorId(null); if (kind !== "routeVertex") { setSelectedRouteId(null); setActivePanel(null); } setTool("select");
+    setSelectedRouteVertexId(kind === "routeVertex" ? itemId : null);
   };
   const startAnnotationDrag = (event: PointerEvent<HTMLButtonElement>, point: Point, annotationKind: PointAnnotationKind) => {
     event.preventDefault(); event.stopPropagation();
@@ -677,6 +883,7 @@ export default function ScubaMapMaker() {
   const selectVector = (vector: Vector) => {
     setSelectedVectorId(vector.id);
     setSelectedId(null);
+    setSelectedRouteVertexId(null);
     const route = routeForVector(routes, vector.id);
     setSelectedRouteId(route?.id ?? null);
     setSurveyTab("routes");
@@ -684,37 +891,84 @@ export default function ScubaMapMaker() {
     setCalibrationForm({ distance: String(vector.distance), unit: vector.unit });
     setNotice(route ? `${routeDisplayName(route)} selected. The clicked segment remains the calibration reference.` : "Route segment selected for calibration.");
   };
-  const addVector = () => {
-    if (!project || !selected) { setNotice("Select A0 or another waypoint first."); return; }
-    const bearing = Number(vectorForm.bearing); const distance = Number(vectorForm.distance);
-    if (!Number.isFinite(bearing) || !Number.isFinite(distance) || distance <= 0) { setNotice("Enter a valid bearing and positive distance."); return; }
-    const pixels = (distance * METERS_PER_UNIT[project.distanceUnit]) / mapScale(project); const radians = ((bearing % 360) * Math.PI) / 180;
-    const next = { id: id(), label: vectorForm.label.trim() || `P${project.waypoints.filter((point) => point.label.startsWith("P")).length + 1}`, name: "", x: Math.max(0, Math.min(CANVAS.width, selected.x + Math.sin(radians) * pixels)), y: Math.max(0, Math.min(CANVAS.height, selected.y - Math.cos(radians) * pixels)), depth: vectorForm.depth === "" ? undefined : Number(vectorForm.depth) };
-    const vector: Vector = { id: id(), fromId: selected.id, toId: next.id, bearing: 0, distance: 0, unit: project.distanceUnit };
-    const eligible = eligibleRoutesAtPoint(selected.id);
-    const continuing = vectorForm.routeId === "new" ? undefined : eligible.find((route) => route.id === vectorForm.routeId);
-    let routeId = continuing?.id ?? "";
-    mutate((current) => {
-      current.waypoints.push(next);
-      current.vectors.push({ ...vector, unit: current.distanceUnit });
-      current.routes ??= [];
-      if (continuing) {
-        const routeIndex = current.routes.findIndex((route) => route.id === continuing.id);
-        const appended = routeIndex >= 0 ? appendVectorToRoute(current.routes[routeIndex], vector, current.vectors) : undefined;
-        if (routeIndex >= 0 && appended) current.routes[routeIndex] = appended;
-      } else {
-        const created = createRoute(vector, { name: vectorForm.routeName, createId: () => id() });
-        current.routes.push(created);
-        routeId = created.id;
-      }
-      return synchronizeVectors(current);
+  const beginRouteDrawing = (extension?: { route: SavedRoute; at: "start" | "end" }, startNode?: RouteNode) => {
+    if (!project) return;
+    if (!project.waypoints.some((point) => point.label.toUpperCase() === "A0")) {
+      setTool("origin");
+      setActivePanel(null);
+      setNotice("Place the required A0 origin before drawing routes.");
+      return;
+    }
+    let points: DraftRoutePoint[] = startNode ? [{ x: startNode.x, y: startNode.y, nodeId: startNode.id }] : [];
+    if (extension) {
+      const endpoints = routeEndpoints(extension.route, project.vectors);
+      const nodeId = extension.at === "start" ? endpoints?.startId : endpoints?.endId;
+      const node = nodeId ? nodeMap.get(nodeId) : undefined;
+      if (!node || endpoints?.closed) { setNotice("Choose an open route endpoint to extend."); return; }
+      points = [{ x: node.x, y: node.y, nodeId: node.id }];
+    }
+    setRouteDraft({ points, name: extension?.route.name ?? "", extendRouteId: extension?.route.id, extendAt: extension?.at });
+    setRouteDraftPointer(null);
+    setTool("route");
+    setActivePanel(null);
+    setSelectedId(null);
+    setSelectedRouteId(extension?.route.id ?? null);
+    setSelectedVectorId(null);
+    setSelectedRouteVertexId(null);
+    setNotice(extension ? `Drawing from the ${extension.at} of ${routeDisplayName(extension.route)}. Click vertices, then Finish.` : "Draw a route: click each vertex, then Finish. Every crossing becomes a junction.");
+  };
+  const cancelRouteDrawing = () => {
+    setRouteDraft(null);
+    setRouteDraftPointer(null);
+    setTool("select");
+    setNotice("Route draft canceled. No map geometry changed.");
+  };
+  const undoRouteDraftPoint = () => {
+    setRouteDraft((draft) => {
+      if (!draft) return null;
+      const minimum = draft.extendRouteId ? 1 : 0;
+      return draft.points.length > minimum ? { ...draft, points: draft.points.slice(0, -1) } : draft;
     });
-    setSelectedId(next.id);
-    setSelectedVectorId(vector.id);
-    setSelectedRouteId(routeId);
-    setCalibrationForm({ distance: String(distance), unit: project.distanceUnit });
-    setVectorForm({ bearing: "0", distance: "30", label: "", depth: "", routeId, routeName: "" });
-    setNotice(`${continuing ? "Continued" : "Started"} ${continuing ? routeDisplayName(continuing) : vectorForm.routeName.trim() || "a new route"} at ${next.label}.`);
+  };
+  const finishRouteDrawing = () => {
+    if (!project || !routeDraft || routeDraft.points.length < 2) { setNotice("Add at least two distinct route vertices before finishing."); return; }
+    const usablePoints = routeDraft.points.filter((point, index, points) => index === 0 || Math.hypot(point.x - points[index - 1].x, point.y - points[index - 1].y) > 1e-6);
+    if (usablePoints.length < 2) { setNotice("A route needs at least one visible segment."); return; }
+    let finishedRouteId = routeDraft.extendRouteId ?? id();
+    let firstVectorId = "";
+    mutate((current) => {
+      const resolvedNodeIds = usablePoints.map((point) => {
+        if (point.nodeId && routeNodes(current).some((node) => node.id === point.nodeId)) return point.nodeId;
+        const vertex = { id: id(), x: point.x, y: point.y };
+        current.routeVertices.push(vertex);
+        return vertex.id;
+      });
+      const newVectors = resolvedNodeIds.slice(1).map((toId, index) => ({ id: id(), fromId: resolvedNodeIds[index], toId, bearing: 0, distance: 0, unit: current.distanceUnit } satisfies Vector));
+      firstVectorId = newVectors[0]?.id ?? "";
+      current.vectors.push(...newVectors);
+      current.routes ??= [];
+      const steps = newVectors.map((vector) => ({ vectorId: vector.id, reversed: false }));
+      const routeIndex = routeDraft.extendRouteId ? current.routes.findIndex((route) => route.id === routeDraft.extendRouteId) : -1;
+      if (routeIndex >= 0) {
+        const route = current.routes[routeIndex];
+        const prepended = [...steps].reverse().map((step) => ({ ...step, reversed: true }));
+        current.routes[routeIndex] = routeDraft.extendAt === "start"
+          ? { ...route, steps: prepended.concat(route.steps) }
+          : { ...route, steps: route.steps.concat(steps) };
+        finishedRouteId = route.id;
+      } else {
+        current.routes.push({ id: finishedRouteId, name: routeDraft.name.trim(), steps });
+      }
+      return reconcileRouteTopology(current);
+    });
+    setRouteDraft(null);
+    setRouteDraftPointer(null);
+    setTool("select");
+    setSelectedRouteId(finishedRouteId);
+    setSelectedVectorId(firstVectorId || null);
+    setSurveyTab("routes");
+    setActivePanel("survey");
+    setNotice(routeDraft.extendRouteId ? "Route extended. New crossings were connected automatically." : "Route created. New crossings were connected automatically.");
   };
   const calibrateMap = () => {
     if (!project || !selectedVector) return;
@@ -741,78 +995,104 @@ export default function ScubaMapMaker() {
     });
     setNotice(annotationKind ? `${POINT_ANNOTATION_LABELS[annotationKind]} returned to automatic placement.` : "All point labels returned to automatic placement.");
   };
-  const connectPoints = (fromId: string, targetId: string) => {
-    if (!project || !targetId || !possibleNextPoints(project, fromId).some((point) => point.id === targetId)) { setNotice("That connection duplicates an existing route."); return; }
-    const vector: Vector = { id: id(), fromId, toId: targetId, bearing: 0, distance: 0, unit: project.distanceUnit };
-    const eligible = eligibleRoutesAtPoint(fromId);
-    const choice = connectRouteByPoint[fromId] ?? eligible[0]?.id ?? "new";
-    let sourceRoute = choice === "new" ? undefined : eligible.find((route) => route.id === choice);
-    const sourcePointIds = sourceRoute ? routePointIds(sourceRoute, project.vectors) : [];
-    const sourceEndpoints = sourceRoute ? routeEndpoints(sourceRoute, project.vectors) : undefined;
-
-    if (sourceRoute && sourceEndpoints?.startId === targetId) {
-      if (!window.confirm(`Close ${routeDisplayName(sourceRoute)} back to its start?`)) return;
-    } else if (sourceRoute && sourcePointIds.includes(targetId)) {
-      // Returning to an interior point is a branch, not a continuation of the
-      // ordered path. Keep the new segment in its own route.
-      sourceRoute = undefined;
-    }
-
-    const targetRoute = sourceRoute ? routes.find((route) => {
-      if (route.id === sourceRoute!.id) return false;
-      const endpoints = routeEndpoints(route, project.vectors);
-      return Boolean(endpoints && !endpoints.closed && routeEndpointKind(route, targetId, project.vectors));
-    }) : undefined;
-    let joined: SavedRoute | undefined;
-    if (sourceRoute && targetRoute && window.confirm(`Join ${routeDisplayName(sourceRoute)} and ${routeDisplayName(targetRoute)}?\n\nChoose Cancel to keep them separate.`)) {
-      const firstName = sourceRoute.name.trim();
-      const secondName = targetRoute.name.trim();
-      let finalName = firstName || secondName;
-      if (firstName && secondName && firstName !== secondName) {
-        finalName = window.prompt("Name the joined route", firstName)?.trim() ?? firstName;
-      }
-      joined = joinRoutes(sourceRoute, targetRoute, [...project.vectors, vector], { connectingVector: vector, name: finalName });
-      if (!joined) { setNotice("Those routes could not be joined safely. No connection was added."); return; }
-    }
-
-    let routeId = joined?.id ?? sourceRoute?.id ?? "";
-    mutate((current) => {
-      current.vectors.push({ ...vector, unit: current.distanceUnit });
-      current.routes ??= [];
-      if (joined && sourceRoute && targetRoute) {
-        const insertionIndex = Math.max(0, current.routes.findIndex((route) => route.id === sourceRoute!.id));
-        current.routes = current.routes.filter((route) => route.id !== sourceRoute!.id && route.id !== targetRoute.id);
-        current.routes.splice(Math.min(insertionIndex, current.routes.length), 0, joined);
-      } else if (sourceRoute) {
-        const routeIndex = current.routes.findIndex((route) => route.id === sourceRoute!.id);
-        const appended = routeIndex >= 0 ? appendVectorToRoute(current.routes[routeIndex], vector, current.vectors) : undefined;
-        if (routeIndex >= 0 && appended) current.routes[routeIndex] = appended;
-      } else {
-        const created = createRoute(vector, { createId: () => id() });
-        current.routes.push(created);
-        routeId = created.id;
-      }
-      return synchronizeVectors(current);
-    });
-    setSelectedRouteId(routeId);
-    setSelectedVectorId(vector.id);
-    setConnectRouteByPoint((current) => ({ ...current, [targetId]: routeId }));
-    setNotice(joined ? `Routes joined as ${joined.name || routeDisplayName(joined)}.` : sourceRoute ? `Continued ${routeDisplayName(sourceRoute)}.` : "Started a new unnamed route.");
-  };
   const deletePoint = (pointId: string) => {
     if (!project) return;
     const point = project.waypoints.find((item) => item.id === pointId);
     if (!point) return;
     if (point.label === "A0") { setNotice("A0 is the required root and cannot be removed. Start a new project to reset it."); return; }
-    if (!window.confirm(`Delete ${point.label} and its attached routes?`)) return;
+    const attached = project.vectors.some((vector) => vector.fromId === point.id || vector.toId === point.id);
+    if (attached) { setPendingDeletePointId(point.id); return; }
+    if (!window.confirm(`Delete point of interest ${point.label}?`)) return;
     mutate((current) => {
       current.waypoints = current.waypoints.filter((item) => item.id !== point.id);
-      current.vectors = current.vectors.filter((vector) => vector.fromId !== point.id && vector.toId !== point.id);
-      current.routes = normalizeRoutes(current.waypoints, current.vectors, current.routes, { createId: () => id() });
-      return current;
+      return reconcileRouteTopology(current);
     });
     setSelectedId((current) => current === point.id ? null : current);
-    setNotice("Removed the point and its attached routes.");
+    setNotice("Point of interest removed.");
+  };
+  const removePointPreservingRoutes = (pointId: string) => {
+    const point = project?.waypoints.find((item) => item.id === pointId);
+    if (!point || point.label === "A0") return;
+    mutate((current) => {
+      const removed = current.waypoints.find((item) => item.id === pointId);
+      if (!removed) return current;
+      current.waypoints = current.waypoints.filter((item) => item.id !== pointId);
+      current.routeVertices.push({ id: removed.id, x: removed.x, y: removed.y });
+      return reconcileRouteTopology(current);
+    });
+    setPendingDeletePointId(null);
+    setSelectedId(null);
+    setNotice(`${point.label} removed as a point of interest; its route junction was preserved.`);
+  };
+  const removePointAndRouteLegs = (pointId: string) => {
+    const point = project?.waypoints.find((item) => item.id === pointId);
+    if (!point || point.label === "A0") return;
+    mutate((current) => {
+      current.waypoints = current.waypoints.filter((item) => item.id !== pointId);
+      current.vectors = current.vectors.filter((vector) => vector.fromId !== pointId && vector.toId !== pointId);
+      current.routes = normalizeRoutes(routeNodes(current), current.vectors, current.routes, { createId: id });
+      return reconcileRouteTopology(current);
+    });
+    setPendingDeletePointId(null);
+    setSelectedId(null);
+    setSelectedVectorId(null);
+    setSelectedRouteId(null);
+    setNotice(`${point.label} and its incident route legs were removed.`);
+  };
+  const deleteSelectedRoute = () => {
+    if (!project || !selectedRoute || !window.confirm(`Delete the entire route “${routeDisplayName(selectedRoute)}”?`)) return;
+    mutate((current) => {
+      const result = deleteSavedRoute(current.waypoints, current.routeVertices, current.vectors, current.routes ?? [], selectedRoute.id, { epsilon: 1e-6, createId: id });
+      return applyRouteEditResult(current, result);
+    });
+    setSelectedRouteId(null); setSelectedVectorId(null); setSelectedRouteVertexId(null);
+    setNotice("Route deleted. Shared junctions used by other routes were retained.");
+  };
+  const deleteSelectedSegment = () => {
+    if (!project || !selectedVector || !window.confirm("Delete this route leg? The affected ordered route will be normalized.")) return;
+    mutate((current) => {
+      const result = deleteRouteSegment(current.waypoints, current.routeVertices, current.vectors, current.routes ?? [], selectedVector.id, { epsilon: 1e-6, createId: id });
+      return applyRouteEditResult(current, result);
+    });
+    setSelectedVectorId(null); setSelectedRouteVertexId(null);
+    setNotice("Route leg deleted and affected routes normalized.");
+  };
+  const insertSelectedSegmentVertex = () => {
+    if (!project || !selectedVector) return;
+    let vertexId: string | undefined;
+    mutate((current) => {
+      const result = insertRouteMidpoint(current.waypoints, current.routeVertices, current.vectors, current.routes ?? [], selectedVector.id, { epsilon: 1e-6, createId: id });
+      if (result.ok) vertexId = result.nodeId;
+      return applyRouteEditResult(current, result);
+    });
+    setSelectedRouteVertexId(vertexId ?? null);
+    setSelectedVectorId(null);
+    setNotice("Route vertex inserted. Drag its handle to reshape the route.");
+  };
+  const removeSelectedRouteVertex = () => {
+    if (!project || !selectedRouteVertex) return;
+    const incident = project.vectors.filter((vector) => vector.fromId === selectedRouteVertex.id || vector.toId === selectedRouteVertex.id);
+    const owningRoutes = routes.filter((route) => routePointIds(route, project.vectors).includes(selectedRouteVertex.id));
+    if (incident.length > 2 || owningRoutes.length > 1) { setNotice("This is a shared multi-route junction. Remove its incident route legs before deleting it."); return; }
+    if (incident.length === 1) {
+      const vectorId = incident[0].id;
+      mutate((current) => {
+        const result = deleteRouteSegment(current.waypoints, current.routeVertices, current.vectors, current.routes ?? [], vectorId, { epsilon: 1e-6, createId: id });
+        return applyRouteEditResult(current, result);
+      });
+      setSelectedRouteVertexId(null); setSelectedVectorId(null);
+      setNotice("Endpoint leg deleted.");
+      return;
+    }
+    if (incident.length !== 2 || owningRoutes.length !== 1) { setNotice("Only a simple degree-two route vertex or endpoint can be deleted."); return; }
+    let retainedVectorId: string | null = null;
+    mutate((current) => {
+      const result = collapseRouteVertex(current.waypoints, current.routeVertices, current.vectors, current.routes ?? [], selectedRouteVertex.id, { epsilon: 1e-6, createId: id });
+      if (result.ok) retainedVectorId = result.vectors.find((vector) => incident.some((item) => item.id === vector.id))?.id ?? null;
+      return applyRouteEditResult(current, result);
+    });
+    setSelectedRouteVertexId(null); setSelectedVectorId(retainedVectorId);
+    setNotice("Simple route vertex collapsed into one straight segment.");
   };
   const deleteSelected = () => { if (selected) deletePoint(selected.id); };
   const onReferenceUpload = (event: ChangeEvent<HTMLInputElement>) => {
@@ -822,12 +1102,12 @@ export default function ScubaMapMaker() {
   const changeDistanceUnit = (unit: Unit) => mutate((current) => { current.distanceUnit = unit; return synchronizeVectors(current); }, false);
   const setExportSetting = (setting: ExportToggleKey, value: boolean) => mutate((current) => { current.exportSettings = { ...DEFAULT_EXPORT_SETTINGS, ...current.exportSettings, [setting]: value }; return current; }, false);
   const setNamePlacement = (namePlacement: NamePlacement) => mutate((current) => { current.exportSettings = { ...DEFAULT_EXPORT_SETTINGS, ...current.exportSettings, namePlacement }; return current; }, false);
-  const newProject = () => { const next = emptyProject("New dive site"); setProject(next); setProjects((items) => [next, ...items]); setSelectedId(null); setSelectedVectorId(null); setSelectedRouteId(null); setUndoStack([]); setRedoStack([]); void persistProject(next); setNotice("New project created locally."); };
+  const newProject = () => { const next = emptyProject("New dive site"); setProject(next); setProjects((items) => [next, ...items]); setSelectedId(null); setSelectedVectorId(null); setSelectedRouteId(null); setSelectedRouteVertexId(null); setRouteDraft(null); setUndoStack([]); setRedoStack([]); void persistProject(next); setNotice("New project created locally."); };
   const duplicateProject = () => { if (!project) return; const next = clone(project); next.id = id(); next.title = `${project.title} copy`; setProject(next); setProjects((items) => [next, ...items]); void persistProject(next); setNotice("Project duplicated locally."); };
-  const deleteProject = () => { if (!project || !window.confirm(`Delete “${project.title}” from this browser?`)) return; void removeProjectFromStore(project.id); const remaining = projects.filter((item) => item.id !== project.id); const next = remaining[0] ?? emptyProject("New dive site"); setProjects(remaining.length ? remaining : [next]); setProject(next); setSelectedId(null); setSelectedVectorId(null); setSelectedRouteId(null); if (!remaining.length) void persistProject(next); setNotice("Local project deleted."); };
+  const deleteProject = () => { if (!project || !window.confirm(`Delete “${project.title}” from this browser?`)) return; void removeProjectFromStore(project.id); const remaining = projects.filter((item) => item.id !== project.id); const next = remaining[0] ?? emptyProject("New dive site"); setProjects(remaining.length ? remaining : [next]); setProject(next); setSelectedId(null); setSelectedVectorId(null); setSelectedRouteId(null); setSelectedRouteVertexId(null); setRouteDraft(null); if (!remaining.length) void persistProject(next); setNotice("Local project deleted."); };
   const exportBackup = () => { if (!project) return; const blob = new Blob([JSON.stringify(project, null, 2)], { type: "application/json" }); const link = document.createElement("a"); link.href = URL.createObjectURL(blob); link.download = `${project.title.replace(/[^a-z0-9]+/gi, "-").toLowerCase() || "dive-map"}.json`; link.click(); URL.revokeObjectURL(link.href); setNotice("Editable project backup downloaded."); };
   const importBackup = (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]; if (!file) return; const reader = new FileReader(); reader.onload = () => { try { const raw = JSON.parse(String(reader.result)) as Project; if (raw.version !== 1 || !Array.isArray(raw.waypoints)) throw new Error("Unsupported backup"); const imported = normalizeProject(raw); imported.id = id(); imported.title = `${imported.title || "Imported dive site"} (imported)`; setProject(imported); setProjects((items) => [imported, ...items]); void persistProject(imported); setNotice("Project backup imported into this browser."); } catch { setNotice("That file is not a compatible dive-map backup."); } }; reader.readAsText(file); event.target.value = "";
+    const file = event.target.files?.[0]; if (!file) return; const reader = new FileReader(); reader.onload = () => { try { const raw = JSON.parse(String(reader.result)) as StoredProject; if ((raw.version !== 1 && raw.version !== 2) || !Array.isArray(raw.waypoints)) throw new Error("Unsupported backup"); const imported = normalizeProject(raw); imported.id = id(); imported.title = `${imported.title || "Imported dive site"} (imported)`; setProject(imported); setProjects((items) => [imported, ...items]); void persistProject(imported); setNotice(`Project v${raw.version} backup imported and normalized to v2.`); } catch { setNotice("That file is not a compatible dive-map backup."); } }; reader.readAsText(file); event.target.value = "";
   };
   const updateFieldDraft = (pointId: string, patch: Partial<FieldDraft>) => {
     mutate((current) => {
@@ -875,12 +1155,11 @@ export default function ScubaMapMaker() {
     const incoming = captureImportReview.packageValue.points.map((point) => ({ ...point, symbol: normalizePointSymbol(point.symbol) } as Point));
     mutate((current) => {
       current.waypoints = mergeFieldCapturePoints(current.waypoints, incoming, captureConflictIds);
-      current.routes = normalizeRoutes(current.waypoints, current.vectors, current.routes, { createId: id });
-      return current;
+      return reconcileRouteTopology(current);
     });
     setCaptureImportReview(null);
     setCaptureConflictIds(new Set());
-    setNotice(`Merged ${captureImportReview.additions.length} new point${captureImportReview.additions.length === 1 ? "" : "s"}${captureConflictIds.size ? ` and ${captureConflictIds.size} selected field update${captureConflictIds.size === 1 ? "" : "s"}` : ""}. Route topology was unchanged.`);
+    setNotice(`Merged ${captureImportReview.additions.length} new point${captureImportReview.additions.length === 1 ? "" : "s"}${captureConflictIds.size ? ` and ${captureConflictIds.size} selected field update${captureConflictIds.size === 1 ? "" : "s"}` : ""}. Points landing on routes were attached automatically.`);
   };
   const openPointTableWindow = () => {
     if (!project) return;
@@ -996,12 +1275,18 @@ export default function ScubaMapMaker() {
     const text = annotationText(point, annotationKind);
     return offset && text ? [{ point, annotationKind, offset, text }] : [];
   }));
-  const routeSymbolPoints = project.waypoints.filter((point) => hasDescriptiveName(point) && point.symbol);
+  const routeSymbolPoints = project.waypoints.filter((point) => point.symbol);
   const renderAnnotationChip = (annotationKind: PointAnnotationKind, text: string) => <span className={`point-annotation-chip point-annotation-${annotationKind}${annotationKind === "name" && !visibleLayers.pointNames ? " screen-primary-name" : ""}${annotationKind === "name" && !exportSettings.pointNames ? " print-primary-name" : ""}`}>{text}</span>;
   const routeMembershipsForPoint = (pointId: string) => routes.flatMap((route) => {
-    const pointIds = routePointIds(route, project.vectors);
+    const routeNodeIds = routePointIds(route, project.vectors);
+    const pointIds = routeNodeIds.filter((nodeId) => pointMap.has(nodeId));
     const pointIndex = pointIds.indexOf(pointId);
-    return pointIndex >= 0 ? [{ route, pointIndex, pointCount: pointIds.length }] : [];
+    return pointIndex >= 0 ? [{
+      route,
+      pointIndex,
+      atRouteStart: routeNodeIds[0] === pointId,
+      atRouteEnd: routeNodeIds.at(-1) === pointId,
+    }] : [];
   });
   const filteredPoints = project.waypoints.filter((point) => {
     const named = hasDescriptiveName(point);
@@ -1011,13 +1296,15 @@ export default function ScubaMapMaker() {
     return `${point.label} ${point.name ?? ""}`.toLowerCase().includes(deferredPointSearch);
   });
   const selectedRoutePointIds = selectedRoute ? routePointIds(selectedRoute, project.vectors) : [];
+  const selectedRouteVertexIds = [...new Set(selectedRoutePointIds.filter((nodeId) => project.routeVertices.some((vertex) => vertex.id === nodeId)))];
   const selectedRouteEndpoints = selectedRoute ? routeEndpoints(selectedRoute, project.vectors) : undefined;
   const selectedRoutePath = selectedRoute && selectedRoutePointIds.length >= 2
-    ? routePathData({ key: selectedRoute.id, pointIds: selectedRoutePointIds, closed: Boolean(selectedRouteEndpoints?.closed) }, pointMap)
+    ? routePathData({ key: selectedRoute.id, pointIds: selectedRoutePointIds, closed: Boolean(selectedRouteEndpoints?.closed) }, nodeMap)
     : "";
   const routeLabelAnchors = routes.flatMap((route) => {
-    const screen = routeLabelAnchor(route, project.waypoints, project.vectors);
-    const print = routeLabelAnchor(route, project.waypoints, project.vectors, printArea);
+    const nodes = routeNodes(project);
+    const screen = routeLabelAnchor(route, nodes, project.vectors);
+    const print = routeLabelAnchor(route, nodes, project.vectors, printArea);
     return screen ? [{ route, screen, print }] : [];
   });
   const routeEditor = (openDrawerForSegment: boolean) => <div className="route-editor">
@@ -1025,26 +1312,33 @@ export default function ScubaMapMaker() {
       {routes.map((route, index) => {
         const endpoints = routeEndpoints(route, project.vectors);
         const total = route.steps.reduce((sum, step) => sum + (project.vectors.find((vector) => vector.id === step.vectorId)?.distance ?? 0), 0);
-        return <button className={selectedRoute?.id === route.id ? "active" : ""} key={route.id} onClick={() => focusRoute(route, openDrawerForSegment)}><span>{index + 1}</span><b>{routeDisplayName(route)}</b><small>{formatNumber(total)} {project.distanceUnit} · {route.steps.length} seg</small><em>{endpoints ? `${pointMap.get(endpoints.startId)?.label ?? "?"} → ${pointMap.get(endpoints.endId)?.label ?? "?"}` : "Incomplete"}</em></button>;
+        return <button className={selectedRoute?.id === route.id ? "active" : ""} key={route.id} onClick={() => focusRoute(route, openDrawerForSegment)}><span>{index + 1}</span><b>{routeDisplayName(route)}</b><small>{formatNumber(total)} {project.distanceUnit} · {route.steps.length} seg</small><em>{endpoints ? `${nodeLabel(nodeMap.get(endpoints.startId))} → ${nodeLabel(nodeMap.get(endpoints.endId))}` : "Incomplete"}</em></button>;
       })}
-      {!routes.length && <div className="empty-route-list"><b>No routes yet</b><span>Select a point below, then add its first segment.</span></div>}
+      {!routes.length && <div className="empty-route-list"><b>No routes yet</b><span>Choose Draw route, then click each bend or connection on the map.</span></div>}
     </div>
     {selectedRoute ? <>
       <RouteNameEditor key={`${selectedRoute.id}:${selectedRoute.name}`} route={selectedRoute} fallback={routeFallbackName(selectedRoute)} onCommit={(name) => commitRouteName(selectedRoute.id, name)}/>
       <dl className="route-order-summary">
-        <div><dt>Start</dt><dd>{selectedRouteEndpoints ? pointMap.get(selectedRouteEndpoints.startId)?.label ?? "Unknown" : "Unknown"}</dd></div>
-        <div><dt>End</dt><dd>{selectedRouteEndpoints ? pointMap.get(selectedRouteEndpoints.endId)?.label ?? "Unknown" : "Unknown"}</dd></div>
+        <div><dt>Start</dt><dd>{selectedRouteEndpoints ? nodeLabel(nodeMap.get(selectedRouteEndpoints.startId)) : "Unknown"}</dd></div>
+        <div><dt>End</dt><dd>{selectedRouteEndpoints ? nodeLabel(nodeMap.get(selectedRouteEndpoints.endId)) : "Unknown"}</dd></div>
         <div><dt>Segments</dt><dd>{selectedRoute.steps.length}</dd></div>
       </dl>
       <button className="secondary-button full-width route-reverse" disabled={selectedRouteEndpoints?.closed} onClick={() => reverseSavedRoute(selectedRoute.id)}><SoundingsIcon name="route"/>Reverse route</button>
+      {!selectedRouteEndpoints?.closed && <div className="route-editor-actions"><button onClick={() => beginRouteDrawing({ route: selectedRoute, at: "start" })}>Extend start</button><button onClick={() => beginRouteDrawing({ route: selectedRoute, at: "end" })}>Extend end</button></div>}
+      <div className="route-topology-actions">
+        <button disabled={!selectedVector} onClick={insertSelectedSegmentVertex}>Insert vertex</button>
+        <button disabled={!selectedVector} onClick={deleteSelectedSegment}>Delete leg</button>
+        <button disabled={!selectedRouteVertex} onClick={removeSelectedRouteVertex}>{selectedRouteVertex && project.vectors.filter((vector) => vector.fromId === selectedRouteVertex.id || vector.toId === selectedRouteVertex.id).length === 1 ? "Delete endpoint leg" : "Collapse vertex"}</button>
+        <button className="danger-button" onClick={deleteSelectedRoute}>Delete whole route</button>
+      </div>
       <ol className="route-step-list" aria-label={`Ordered steps for ${routeDisplayName(selectedRoute)}`}>
         {selectedRoute.steps.map((step, index) => {
           const vector = project.vectors.find((item) => item.id === step.vectorId);
           if (!vector) return null;
           const endpoints = routeStepPointIds(step, vector);
-          const start = pointMap.get(endpoints.startId);
-          const end = pointMap.get(endpoints.endId);
-          return <li key={step.vectorId}><button className={selectedVectorId === step.vectorId ? "active" : ""} onClick={() => focusRoute(selectedRoute, openDrawerForSegment, step.vectorId)}><span>{index + 1}</span><b>{start?.label ?? "?"} → {end?.label ?? "?"}</b><small>{Math.round(vector.bearing)}° · {formatNumber(vector.distance)} {vector.unit}</small></button></li>;
+          const start = nodeMap.get(endpoints.startId);
+          const end = nodeMap.get(endpoints.endId);
+          return <li key={step.vectorId}><button className={selectedVectorId === step.vectorId ? "active" : ""} onClick={() => focusRoute(selectedRoute, openDrawerForSegment, step.vectorId)}><span>{index + 1}</span><b>{nodeLabel(start, `Vertex ${index + 1}`)} → {nodeLabel(end, `Vertex ${index + 2}`)}</b><small>{Math.round(vector.bearing)}° · {formatNumber(vector.distance)} {vector.unit}</small></button></li>;
         })}
       </ol>
     </> : <p className="drawer-copy">Select a segment on the map or choose a route to name and order it.</p>}
@@ -1058,6 +1352,10 @@ export default function ScubaMapMaker() {
   const routeNameLabelStyle = (anchor: RouteLabelAnchor) => ({ ...routeControlStyle, left: anchor.x, top: anchor.y, "--route-name-angle": `${anchor.angleRadians}rad` }) as CSSProperties;
   const routeNetworkStyle = { "--route-width": `${2 / zoom}px`, "--route-selected-width": `${3 / zoom}px`, "--route-selected-path-width": `${5 / zoom}px`, "--route-chevron-width": `${2 / zoom}px`, "--route-branch-radius": `${1 / zoom}px`, "--route-symbol-cutout-radius": `${30 * pointSymbolScale / zoom}px`, "--print-route-width": `${2 / effectivePrintScale}px`, "--print-route-branch-radius": `${1 / effectivePrintScale}px`, "--print-route-symbol-cutout-radius": `${20 * pointSymbolScale / effectivePrintScale}px` } as CSSProperties;
   const selectedDirectionPath = selectedRouteLine ? directionChevronPath(selectedRouteLine, zoom) : "";
+  const routeDraftPath = routeDraft && routeDraft.points.length > 1 ? routeDraft.points.map((point, index) => `${index ? "L" : "M"}${point.x} ${point.y}`).join(" ") : "";
+  const routeDraftPreviewPath = routeDraft?.points.length && routeDraftPointer ? `M${routeDraft.points[routeDraft.points.length - 1].x} ${routeDraft.points[routeDraft.points.length - 1].y} L${routeDraftPointer.x} ${routeDraftPointer.y}` : "";
+  const routeDraftStyle = { "--route-draft-node-radius": `${5 / zoom}px` } as CSSProperties;
+  const routeVertexDisplayStyle = { "--route-vertex-hit-size": `${44 / zoom}px`, "--route-vertex-size": `${10 / zoom}px`, "--route-vertex-border": `${2 / zoom}px`, "--route-vertex-halo": `${3 / zoom}px` } as CSSProperties;
   const waypointDisplayStyle = { "--point-hit-size": `${44 / zoom}px`, "--point-dot-size": `${14 / zoom}px`, "--point-dot-border": `${2 / zoom}px`, "--point-ring": `${1 / zoom}px`, "--point-origin-ring": `${2 / zoom}px`, "--point-selected-ring": `${3 / zoom}px`, "--point-shadow": `${1 / zoom}px`, "--point-shadow-blur": `${4 / zoom}px`, "--point-symbol-size": `${38 * pointSymbolScale / zoom}px`, "--junction-size": `${10 / zoom}px`, "--junction-border": `${2 / zoom}px`, "--junction-halo": `${4 / zoom}px` } as CSSProperties;
   const printAreaDisplayStyle = { "--print-area-stroke": `${2 / zoom}px`, "--print-area-dash": `${8 / zoom}px`, "--print-area-dash-gap": `${6 / zoom}px`, "--print-area-label-top": `${-2 / zoom}px`, "--print-area-label-padding-y": `${4 / zoom}px`, "--print-area-label-padding-x": `${7 / zoom}px`, "--print-area-label-font": `${10 / zoom}px`, "--print-area-handle-size": `${14 / zoom}px`, "--print-area-handle-offset": `${-8 / zoom}px`, "--print-area-focus-width": `${2 / zoom}px`, "--print-area-focus-offset": `${2 / zoom}px` } as CSSProperties;
   const annotationDisplayStyle = { "--annotation-hit-width": `${44 / zoom}px`, "--annotation-hit-height": `${18 / zoom}px`, "--annotation-touch-hit": `${44 / zoom}px`, "--annotation-manual-hit": `${44 / zoom}px`, "--annotation-stack-x": `${28 / zoom}px`, "--annotation-padding-x": `${3 / zoom}px`, "--annotation-padding-y": `${1 / zoom}px`, "--annotation-radius": `${3 / zoom}px`, "--annotation-label-size": `${13 / zoom}px`, "--annotation-detail-size": `${10 / zoom}px`, "--annotation-focus-width": `${1.5 / zoom}px`, "--point-leader-width": `${1 / zoom}px`, "--print-point-leader-width": `${1 / effectivePrintScale}px` } as CSSProperties;
@@ -1077,7 +1375,7 @@ export default function ScubaMapMaker() {
               <td><input aria-label={`${point.label} Name`} value={point.name ?? ""} onChange={(event) => mutate((current) => { const item = current.waypoints.find((entry) => entry.id === point.id); if (item) item.name = event.target.value; return current; }, false)}/></td>
               <td><div className="point-symbol-cell">{point.symbol ? <PointSymbolImage className="point-symbol-table-preview" symbol={point.symbol}/> : <span className="point-symbol-circle-preview" aria-hidden="true"/>}<select aria-label={`${point.label} symbol`} value={point.symbol ?? ""} onChange={(event) => setPointSymbol(point.id, normalizePointSymbol(event.target.value))}><option value="">Circle</option>{POINT_SYMBOLS.map((symbol) => <option value={symbol.id} key={symbol.id}>{symbol.label}</option>)}</select></div></td>
               <td><input aria-label={`${point.label} current depth`} inputMode="decimal" placeholder={project.depthUnit} value={point.depth ?? ""} onChange={(event) => mutate((current) => { const item = current.waypoints.find((entry) => entry.id === point.id); if (item) item.depth = event.target.value === "" ? undefined : Number(event.target.value); return current; }, false)}/></td>
-              <td><div className="point-route-memberships">{memberships.length ? memberships.map(({ route, pointIndex, pointCount }) => <button key={route.id} className="route-table-link" onClick={() => focusRoute(route)}><b>{routeDisplayName(route)}</b><span>{pointIndex === 0 ? "Start" : pointIndex === pointCount - 1 ? "End" : `Point ${pointIndex + 1}`}</span></button>) : <span className="empty-cell">Not assigned</span>}</div></td>
+              <td><div className="point-route-memberships">{memberships.length ? memberships.map(({ route, pointIndex, atRouteStart, atRouteEnd }) => <button key={route.id} className="route-table-link" onClick={() => focusRoute(route)}><b>{routeDisplayName(route)}</b><span>{atRouteStart && atRouteEnd ? "Start / end" : atRouteStart ? "Start" : atRouteEnd ? "End" : `Point ${pointIndex + 1}`}</span></button>) : <span className="empty-cell">Not assigned</span>}</div></td>
             </tr>;
           })}</tbody>
         </table>
@@ -1093,13 +1391,13 @@ export default function ScubaMapMaker() {
   );
 
   const selectedConnection = selected ? project.vectors.find((vector) => vector.toId === selected.id) ?? project.vectors.find((vector) => vector.fromId === selected.id) : null;
-  const selectedConnectionStart = selectedConnection ? pointMap.get(selectedConnection.fromId) : null;
+  const selectedConnectionStart = selectedConnection ? nodeMap.get(selectedConnection.fromId) : undefined;
   const selectedOffsetKinds = selected ? POINT_ANNOTATION_KINDS.filter((annotationKind) => selected.labelOffsets?.[annotationKind]) : [];
   const togglePanel = (panel: Exclude<ActivePanel, null>) => setActivePanel((current) => current === panel ? null : panel);
   const selectProject = (projectId: string) => {
     const next = projects.find((item) => item.id === projectId);
     if (!next) return;
-    setProject(next); setSelectedId(null); setSelectedVectorId(null); setSelectedRouteId(null); setUndoStack([]); setRedoStack([]); setActivePanel(null);
+    setProject(next); setSelectedId(null); setSelectedVectorId(null); setSelectedRouteId(null); setSelectedRouteVertexId(null); setRouteDraft(null); setUndoStack([]); setRedoStack([]); setActivePanel(null);
   };
   const pointInspector = selected ? <section className="survey-point-inspector" aria-label={`Point details for ${selected.label}`}>
     <div className="survey-section-heading"><div><span>Selected point</span><h3>{selected.label}{selected.name?.trim() ? ` · ${selected.name.trim()}` : ""}</h3></div><button className="close-button" aria-label={`Close ${selected.label} details`} onClick={() => setSelectedId(null)}><SoundingsIcon name="close"/></button></div>
@@ -1109,20 +1407,12 @@ export default function ScubaMapMaker() {
       <label>Depth<input value={selected.depth ?? ""} placeholder={project.depthUnit} inputMode="decimal" onChange={(event) => mutate((current) => { const point = current.waypoints.find((item) => item.id === selected.id); if (point) point.depth = event.target.value === "" ? undefined : Number(event.target.value); return current; }, false)}/></label>
     </div>
     <PointSymbolPicker point={selected} onChange={(symbol) => setPointSymbol(selected.id, symbol)}/>
-    {routeMembershipsForPoint(selected.id).length > 0 && <div className="point-membership-list"><span>Routes using this point</span>{routeMembershipsForPoint(selected.id).map(({ route, pointIndex, pointCount }) => <button key={route.id} onClick={() => focusRoute(route)}><b>{routeDisplayName(route)}</b><small>{pointIndex === 0 ? "Start" : pointIndex === pointCount - 1 ? "End" : `Point ${pointIndex + 1}`}</small></button>)}</div>}
+    {routeMembershipsForPoint(selected.id).length > 0 && <div className="point-membership-list"><span>Routes using this point</span>{routeMembershipsForPoint(selected.id).map(({ route, pointIndex, atRouteStart, atRouteEnd }) => <button key={route.id} onClick={() => focusRoute(route)}><b>{routeDisplayName(route)}</b><small>{atRouteStart && atRouteEnd ? "Start / end" : atRouteStart ? "Start" : atRouteEnd ? "End" : `Point ${pointIndex + 1}`}</small></button>)}</div>}
     <details className="field-capture-section" open={Boolean(selected.fieldDraft)}><summary>Field draft</summary><p>Optional measurements are saved for desktop route assignment; they do not change route topology.</p><div className="field-grid"><label>From point<select value={selected.fieldDraft?.fromPointId ?? ""} onChange={(event) => updateFieldDraft(selected.id, { fromPointId: event.target.value || undefined })}><option value="">Not specified</option>{project.waypoints.filter((point) => point.id !== selected.id).map((point) => <option value={point.id} key={point.id}>{point.label}{point.name ? ` · ${point.name}` : ""}</option>)}</select></label><label>Bearing °<input inputMode="decimal" value={selected.fieldDraft?.bearing ?? ""} onChange={(event) => updateFieldDraft(selected.id, { bearing: event.target.value === "" ? undefined : Number(event.target.value) })}/></label><label>Distance<input inputMode="decimal" value={selected.fieldDraft?.distance ?? ""} onChange={(event) => updateFieldDraft(selected.id, { distance: event.target.value === "" ? undefined : Number(event.target.value) })}/></label><label>Unit<select value={selected.fieldDraft?.unit ?? project.distanceUnit} onChange={(event) => updateFieldDraft(selected.id, { unit: event.target.value as Unit })}>{Object.entries(UNIT_LABEL).map(([value, name]) => <option value={value} key={value}>{name}</option>)}</select></label></div><label>Field note<textarea value={selected.fieldDraft?.note ?? ""} placeholder="Current, visibility, landmark, or measurement note" onChange={(event) => updateFieldDraft(selected.id, { note: event.target.value })}/></label></details>
     {selectedOffsetKinds.length > 0 && <section className="annotation-reset-section" aria-label="Label positions"><div className="annotation-reset-heading"><span>Label positions</span>{selectedOffsetKinds.length > 1 && <button type="button" aria-label={`Reset all label positions for ${selected.label}`} onClick={() => resetAnnotationOffsets(selected.id)}>Reset all</button>}</div><div className="annotation-reset-list">{selectedOffsetKinds.map((annotationKind) => <div key={annotationKind}><span>{POINT_ANNOTATION_LABELS[annotationKind]}</span><button type="button" aria-label={`Reset ${POINT_ANNOTATION_LABELS[annotationKind]} position for ${selected.label}`} onClick={() => resetAnnotationOffsets(selected.id, annotationKind)}>Reset</button></div>)}</div></section>}
-    {selectedConnection && <dl className="route-summary"><div><dt>From</dt><dd>{selectedConnectionStart?.label ?? selected.label}</dd></div><div><dt>Bearing</dt><dd>{Math.round(selectedConnection.bearing).toString().padStart(3, "0")}°</dd></div><div><dt>Distance</dt><dd>{formatNumber(selectedConnection.distance)} {selectedConnection.unit}</dd></div></dl>}
-    <div className="survey-point-actions"><button className="secondary-button" onClick={() => { setSurveyTab("routes"); setVectorForm((form) => ({ ...form, routeId: eligibleRoutesAtPoint(selected.id)[0]?.id ?? "new" })); }}><SoundingsIcon name="route"/>Build route from {selected.label}</button><button className="danger-button" disabled={selected.label === "A0"} onClick={deleteSelected}><SoundingsIcon name="trash"/>Delete point</button></div>
+    {selectedConnection && <dl className="route-summary"><div><dt>From</dt><dd>{nodeLabel(selectedConnectionStart, selected.label)}</dd></div><div><dt>Bearing</dt><dd>{Math.round(selectedConnection.bearing).toString().padStart(3, "0")}°</dd></div><div><dt>Distance</dt><dd>{formatNumber(selectedConnection.distance)} {selectedConnection.unit}</dd></div></dl>}
+    <div className="survey-point-actions"><button className="secondary-button" onClick={() => beginRouteDrawing(undefined, selected)}><SoundingsIcon name="route"/>Draw route from {selected.label}</button><button className="danger-button" disabled={selected.label === "A0"} onClick={deleteSelected}><SoundingsIcon name="trash"/>Delete point</button></div>
   </section> : null;
-
-  const routeComposer = selected ? <section className="segment-composer">
-    <div className="survey-section-heading"><div><span>Next segment</span><h3>Add from {selected.label}</h3></div><small>{formatDepth(selected, project.depthUnit)}</small></div>
-    <label>Route assignment<select value={eligibleRoutesAtPoint(selected.id).some((route) => route.id === vectorForm.routeId) ? vectorForm.routeId : "new"} onChange={(event) => { const routeId = event.target.value; setVectorForm({ ...vectorForm, routeId }); const route = routes.find((item) => item.id === routeId); if (route) setSelectedRouteId(route.id); }}><option value="new">Start new route</option>{eligibleRoutesAtPoint(selected.id).map((route) => <option value={route.id} key={route.id}>Continue {routeDisplayName(route)}</option>)}</select></label>
-    {(vectorForm.routeId === "new" || !eligibleRoutesAtPoint(selected.id).some((route) => route.id === vectorForm.routeId)) && <label>New route name (optional)<input value={vectorForm.routeName} placeholder="Unnamed route" onChange={(event) => setVectorForm({ ...vectorForm, routeName: event.target.value })}/></label>}
-    <div className="segment-mode" role="tablist" aria-label="Segment destination"><button role="tab" aria-selected={segmentMode === "bearing"} className={segmentMode === "bearing" ? "active" : ""} onClick={() => setSegmentMode("bearing")}>Bearing & distance</button><button role="tab" aria-selected={segmentMode === "existing"} className={segmentMode === "existing" ? "active" : ""} onClick={() => setSegmentMode("existing")}>Existing point</button></div>
-    {segmentMode === "bearing" ? <><div className="field-grid"><label>Bearing °<input inputMode="decimal" value={vectorForm.bearing} onChange={(event) => setVectorForm({ ...vectorForm, bearing: event.target.value })}/></label><label>Distance<input inputMode="decimal" value={vectorForm.distance} onChange={(event) => setVectorForm({ ...vectorForm, distance: event.target.value })}/></label><label>New Point Name<input placeholder="P1" value={vectorForm.label} onChange={(event) => setVectorForm({ ...vectorForm, label: event.target.value })}/></label><label>Depth<input placeholder={project.depthUnit} inputMode="decimal" value={vectorForm.depth} onChange={(event) => setVectorForm({ ...vectorForm, depth: event.target.value })}/></label></div><button className="primary-button" onClick={addVector}>Add next segment from {selected.label}</button></> : <><label>Connect to<select value={segmentTargetId} onChange={(event) => setSegmentTargetId(event.target.value)}><option value="">Choose an existing point</option>{possibleNextPoints(project, selected.id).map((point) => <option value={point.id} key={point.id}>{point.label}{point.name ? ` · ${point.name}` : ""}</option>)}</select></label><button className="primary-button" disabled={!segmentTargetId} onClick={() => { connectPoints(selected.id, segmentTargetId); setSegmentTargetId(""); }}>Connect {selected.label} to point</button></>}
-  </section> : <div className="empty-panel"><SoundingsIcon name="route"/><h3>Select a starting point</h3><p>Choose a point on the map or in the Points tab to start or continue a route.</p></div>;
 
   return (
     <main className="soundings-app app-shell">
@@ -1142,9 +1432,9 @@ export default function ScubaMapMaker() {
           <div className="top-actions"><button onClick={undo} disabled={!undoStack.length}><SoundingsIcon name="undo"/>Undo</button><button onClick={redo} disabled={!redoStack.length}><SoundingsIcon name="redo"/>Redo</button><button className="export-button" onClick={() => setActivePanel("export")}><SoundingsIcon name="export"/>Export</button></div>
         </header>
 
-        <div className={`map-stage ${tool === "select" ? "pan-ready" : ""}${printArea ? " has-print-area" : ""}${smartCalloutsActive ? " smart-callout-mode" : ""}${smartCalloutOverflowIds.length ? " smart-callout-overflow" : ""}`} style={printStageStyle} ref={stageRef} tabIndex={0} aria-label="Map navigation surface. Drag blank map space to pan; scroll to zoom; use arrow keys to move around." onPointerDown={onStagePointerDown} onPointerMove={onStagePointerMove} onPointerUp={onStagePointerUp} onPointerCancel={onStagePointerUp} onWheel={onStageWheel}>
+        <div className={`map-stage ${tool === "select" ? "pan-ready" : ""}${tool === "route" ? " route-draw-active" : ""}${printArea ? " has-print-area" : ""}${smartCalloutsActive ? " smart-callout-mode" : ""}${smartCalloutOverflowIds.length ? " smart-callout-overflow" : ""}`} style={printStageStyle} ref={stageRef} tabIndex={0} aria-label="Map navigation surface. Drag blank map space to pan; scroll to zoom; use arrow keys to move around." onPointerDown={onStagePointerDown} onPointerMove={onStagePointerMove} onPointerUp={onStagePointerUp} onPointerCancel={onStagePointerUp} onWheel={onStageWheel}>
           <div className="print-map-viewport">
-            <div className="map-canvas" onPointerDown={onStagePointerDown} style={{ ...printMapDisplayStyle, transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}>
+            <div className="map-canvas" style={{ ...printMapDisplayStyle, transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}>
             <div className="water-label">BEAVER LAKE · DIVE SITE CHART</div>
             {printArea && <div className="print-area-overlay print-hidden" style={{ ...printAreaDisplayStyle, left: printArea.x, top: printArea.y, width: printArea.width, height: printArea.height }}><button className="print-area-move" aria-label="Move PDF print area" onPointerDown={(event) => startPrintAreaAdjust(event, "move")}>PDF print area</button>{(["nw", "ne", "se", "sw"] as PrintAreaHandle[]).map((handle) => <button key={handle} className={`print-area-handle ${handle}`} aria-label={`Resize PDF print area from ${handle}`} onPointerDown={(event) => startPrintAreaAdjust(event, handle)}/>)}</div>}
             {project.reference.dataUrl && <>
@@ -1163,8 +1453,8 @@ export default function ScubaMapMaker() {
               </defs>
               <g className="route-network-ink" mask="url(#route-symbol-clearance-mask)">
                 <g className="route-network-base">
-                  {visualRouteNetwork.paths.map((path) => <path className="route-network-path" key={path.key} d={routePathData(path, pointMap)}/>)}
-                  {visualRouteNetwork.branchPointIds.map((pointId) => { const point = pointMap.get(pointId); return point ? <circle className="route-network-branch" data-route-branch={pointId} key={pointId} cx={point.x} cy={point.y}/> : null; })}
+                  {visualRouteNetwork.paths.map((path) => <path className="route-network-path" key={path.key} d={routePathData(path, nodeMap)}/>)}
+                  {visualRouteNetwork.branchPointIds.map((pointId) => { const point = nodeMap.get(pointId); return point ? <circle className="route-network-branch" data-route-branch={pointId} key={pointId} cx={point.x} cy={point.y}/> : null; })}
                 </g>
                 {(selectedRoutePath || selectedRouteLine) && <g className="route-network-selection print-hidden">
                   {selectedRoutePath && <path className="route-selection-path" d={selectedRoutePath}/>}
@@ -1173,13 +1463,25 @@ export default function ScubaMapMaker() {
                 </g>}
               </g>
             </svg>}
+            {routeDraft && <svg className="route-draft-layer print-hidden" style={routeDraftStyle} viewBox={`0 0 ${CANVAS.width} ${CANVAS.height}`} aria-hidden="true">
+              {routeDraftPath && <path className="route-draft-path" d={routeDraftPath}/>}
+              {routeDraftPreviewPath && <path className="route-draft-preview" d={routeDraftPreviewPath}/>}
+              {routeDraft.points.map((point, index) => <circle className="route-draft-node" key={`${point.nodeId ?? "draft"}-${index}`} cx={point.x} cy={point.y}/>)}
+            </svg>}
             {project.vectors.map((vector) => {
               const line = geometry(project, vector); if (!line) return null;
               const selectedSegment = selectedVectorId === vector.id;
               return <div className="vector-group" key={vector.id}>
-                <button className={`vector-line${selectedSegment ? " selected-vector" : ""}${visibleLayers.routes ? "" : " screen-hidden"}${exportClass(exportSettings.routes)}`} aria-label={`Select route segment from ${line.start.label} to ${line.end.label}`} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); selectVector(vector); }} style={{ ...routeControlStyle, left: line.start.x, top: line.start.y, width: line.pixels, transform: `rotate(${Math.atan2(line.dy, line.dx)}rad)` }}/>
+                <button className={`vector-line${selectedSegment ? " selected-vector" : ""}${visibleLayers.routes ? "" : " screen-hidden"}${exportClass(exportSettings.routes)}`} aria-label={`Select route segment from ${nodeLabel(line.start)} to ${nodeLabel(line.end)}`} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); selectVector(vector); }} style={{ ...routeControlStyle, left: line.start.x, top: line.start.y, width: line.pixels, transform: `rotate(${Math.atan2(line.dy, line.dx)}rad)` }}/>
                 <button className={`vector-label${visibleLayers.routeLabels ? "" : " screen-hidden"}${exportClass(exportSettings.routeLabels)}`} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); selectVector(vector); }} style={{ ...routeControlStyle, left: line.start.x + line.dx / 2, top: line.start.y + line.dy / 2 }}><span>{Math.round(vector.bearing)}°</span><span>{formatNumber(vector.distance)} {vector.unit}</span></button>
               </div>;
+            })}
+            {selectedRouteVertexIds.map((vertexId) => {
+              const vertex = project.routeVertices.find((item) => item.id === vertexId);
+              if (!vertex) return null;
+              const incidentCount = project.vectors.filter((vector) => vector.fromId === vertex.id || vector.toId === vertex.id).length;
+              const routeCount = routes.filter((route) => routePointIds(route, project.vectors).includes(vertex.id)).length;
+              return <button key={`route-vertex-${vertex.id}`} className={`route-vertex-handle print-hidden${selectedRouteVertexId === vertex.id ? " selected" : ""}${incidentCount > 2 || routeCount > 1 ? " shared" : ""}`} aria-label={`Edit route vertex${incidentCount > 2 || routeCount > 1 ? " shared by routes" : ""}`} style={{ ...routeVertexDisplayStyle, left: vertex.x, top: vertex.y }} onClick={(event) => { event.stopPropagation(); setSelectedRouteVertexId(vertex.id); setSelectedVectorId(null); }} onPointerDown={(event) => startDrag(event, "routeVertex", vertex.id)}/>;
             })}
             {routeLabelAnchors.map(({ route, screen, print }) => <Fragment key={`route-name-${route.id}`}>
               <button
@@ -1211,10 +1513,9 @@ export default function ScubaMapMaker() {
               })}
             </svg>}
             {project.waypoints.map((point) => {
-              const named = hasDescriptiveName(point);
               const displayName = point.name?.trim() ?? "";
-              return <button key={point.id} aria-label={named ? `Edit ${point.label} — ${displayName}` : `Edit ${point.label} connection point`} className={`waypoint ${named ? "named-point" : "junction-point"}${named && point.symbol ? " has-symbol" : ""}${selectedId === point.id ? " selected" : ""}${point.label === "A0" ? " origin" : ""}${exportClass(pointInPrintArea(point, printArea))}`} style={{ ...waypointDisplayStyle, left: point.x, top: point.y }} onClick={(event) => { event.stopPropagation(); setSelectedId(point.id); setSelectedVectorId(null); setSelectedRouteId(null); setSurveyTab("points"); setActivePanel("survey"); setTool("select"); }} onPointerDown={(event) => startDrag(event, "waypoint", point.id)}>
-                {named && (point.symbol ? <PointSymbolImage className={`point-symbol-marker${exportClass(exportSettings.pointMarkers)}`} symbol={point.symbol}/> : <span className={`point-dot${exportClass(exportSettings.pointMarkers)}`}/>)} {!named && <span className="junction-handle" aria-hidden="true"/>}
+              return <button key={point.id} aria-label={displayName ? `Edit ${point.label} — ${displayName}` : `Edit point of interest ${point.label}`} className={`waypoint named-point${point.symbol ? " has-symbol" : ""}${selectedId === point.id ? " selected" : ""}${point.label === "A0" ? " origin" : ""}${exportClass(pointInPrintArea(point, printArea))}`} style={{ ...waypointDisplayStyle, left: point.x, top: point.y }} onClick={(event) => { event.stopPropagation(); setSelectedId(point.id); setSelectedVectorId(null); setSelectedRouteId(null); setSelectedRouteVertexId(null); setSurveyTab("points"); setActivePanel("survey"); setTool("select"); }} onPointerDown={(event) => startDrag(event, "waypoint", point.id)}>
+                {point.symbol ? <PointSymbolImage className={`point-symbol-marker${exportClass(exportSettings.pointMarkers)}`} symbol={point.symbol}/> : <span className={`point-dot${exportClass(exportSettings.pointMarkers)}`}/>}
               </button>;
             })}
             {project.waypoints.map((point) => {
@@ -1242,6 +1543,7 @@ export default function ScubaMapMaker() {
               </Fragment>;
             })}
             <div className={`north-arrow map-furniture${exportClass(exportSettings.mapFurniture)}`}><b>N</b><svg viewBox="0 0 34 56" aria-hidden="true"><path d="M17 2 31 46 17 39 3 46 17 2Z"/><path d="m17 2 14 44-14-7V2Z"/></svg></div><div className={`scale-bar map-furniture${exportClass(exportSettings.mapFurniture)}`}><i style={{ width: mapBar.pixels }}/><span>{formatNumber(mapBar.value)} {project.distanceUnit}</span></div><div className={`map-units map-furniture${exportClass(exportSettings.mapFurniture)}`}>distance: {UNIT_LABEL[project.distanceUnit]} · depth: {UNIT_LABEL[project.depthUnit]}</div>
+            {(tool === "route" || tool === "point" || tool === "origin") && <div className="map-placement-capture print-hidden" aria-hidden="true"/>}
             </div>
           </div>
           {smartCalloutCandidate && <>
@@ -1261,10 +1563,17 @@ export default function ScubaMapMaker() {
           </>}
           {(printArea || smartCalloutsActive) && <div className={`print-crop-furniture${exportClass(exportSettings.mapFurniture)}`}><div className="north-arrow"><b>N</b><span>↑</span></div><div className="scale-bar"><i/><span>{formatNumber(mapBar.value)} {project.distanceUnit}</span></div><div className="map-units">distance: {UNIT_LABEL[project.distanceUnit]} · depth: {UNIT_LABEL[project.depthUnit]}</div></div>}
 
+          {routeDraft && <div className="route-draw-controls print-hidden" role="toolbar" aria-label="Route drawing controls">
+            <span>{routeDraft.extendRouteId ? "Extending route" : "New route"} · {routeDraft.points.length} {routeDraft.points.length === 1 ? "vertex" : "vertices"}</span>
+            <button disabled={routeDraft.points.length <= (routeDraft.extendRouteId ? 1 : 0)} onClick={undoRouteDraftPoint}>Undo</button>
+            <button className="primary" disabled={routeDraft.points.length < 2} onClick={finishRouteDrawing}>Finish</button>
+            <button onClick={cancelRouteDrawing}>Cancel</button>
+          </div>}
+
           <nav className="tool-dock print-hidden" aria-label="Map tools">
             <DockButton icon="select" label="Select" active={tool === "select" && activePanel !== "survey"} onClick={() => { setTool("select"); setActivePanel(null); }}/>
             <DockButton icon="shoreline" label="Shoreline" active={tool === "coast"} disabled={project.shoreLocked} onClick={() => { setTool("coast"); setActivePanel(null); }}/>
-            <DockButton icon="route" label="Survey" active={activePanel === "survey"} onClick={() => { setTool("select"); setActivePanel("survey"); }}/>
+            <DockButton icon="route" label="Draw Route" active={tool === "route"} onClick={() => beginRouteDrawing()}/>
             <DockButton icon="print-area" label="Print Area" active={tool === "printArea"} onClick={() => { setTool("printArea"); setActivePanel(null); setNotice("Drag a rectangle over the map to set the PDF print area."); }}/>
           </nav>
 
@@ -1299,12 +1608,11 @@ export default function ScubaMapMaker() {
               <div className="survey-tabs" role="tablist" aria-label="Survey workspace"><button role="tab" aria-selected={surveyTab === "routes"} className={surveyTab === "routes" ? "active" : ""} onClick={() => setSurveyTab("routes")}>Routes</button><button role="tab" aria-selected={surveyTab === "points"} className={surveyTab === "points" ? "active" : ""} onClick={() => setSurveyTab("points")}>Points</button></div>
               <div className="drawer-body survey-body">
                 {surveyTab === "routes" ? <>
-                  <section className="survey-route-editor"><div className="survey-section-title"><span>Routes</span><button onClick={() => { setSelectedRouteId(null); setSelectedVectorId(null); setVectorForm((form) => ({ ...form, routeId: "new", routeName: "" })); }}>＋ New route</button></div>{routeEditor(true)}</section>
-                  {routeComposer}
-                  <details className="calibration-section"><summary>Scale calibration <small>{formatNumber(mapScale(project))} m / px</small></summary><label>Reference segment<select value={selectedVectorId ?? ""} onChange={(event) => { const vector = project.vectors.find((item) => item.id === event.target.value); if (vector) selectVector(vector); else setSelectedVectorId(null); }}><option value="">Select a route segment</option>{project.vectors.map((vector) => { const start = pointMap.get(vector.fromId); const end = pointMap.get(vector.toId); const route = routeForVector(routes, vector.id); return <option value={vector.id} key={vector.id}>{route ? `${routeDisplayName(route)} · ` : ""}{start?.label} → {end?.label}</option>; })}</select></label>{selectedVector && selectedRouteLine ? <><div className="field-grid"><label>Known distance<input inputMode="decimal" value={calibrationForm.distance} onChange={(event) => setCalibrationForm({ ...calibrationForm, distance: event.target.value })}/></label><label>Unit<select value={calibrationForm.unit} onChange={(event) => setCalibrationForm({ ...calibrationForm, unit: event.target.value as Unit })}>{Object.entries(UNIT_LABEL).map(([value, name]) => <option value={value} key={value}>{name}</option>)}</select></label></div><button className="secondary-button full-width" onClick={calibrateMap}><SoundingsIcon name="calibrate"/>Set map scale</button></> : <p className="drawer-copy">Select a segment to establish real-world scale.</p>}</details>
+                  <section className="survey-route-editor"><div className="survey-section-title"><span>Routes</span><button onClick={() => beginRouteDrawing()}>＋ Draw route</button></div>{routeEditor(true)}</section>
+                  <details className="calibration-section"><summary>Scale calibration <small>{formatNumber(mapScale(project))} m / px</small></summary><label>Reference segment<select value={selectedVectorId ?? ""} onChange={(event) => { const vector = project.vectors.find((item) => item.id === event.target.value); if (vector) selectVector(vector); else setSelectedVectorId(null); }}><option value="">Select a route segment</option>{project.vectors.map((vector) => { const start = nodeMap.get(vector.fromId); const end = nodeMap.get(vector.toId); const route = routeForVector(routes, vector.id); return <option value={vector.id} key={vector.id}>{route ? `${routeDisplayName(route)} · ` : ""}{nodeLabel(start)} → {nodeLabel(end)}</option>; })}</select></label>{selectedVector && selectedRouteLine ? <><div className="field-grid"><label>Known distance<input inputMode="decimal" value={calibrationForm.distance} onChange={(event) => setCalibrationForm({ ...calibrationForm, distance: event.target.value })}/></label><label>Unit<select value={calibrationForm.unit} onChange={(event) => setCalibrationForm({ ...calibrationForm, unit: event.target.value as Unit })}>{Object.entries(UNIT_LABEL).map(([value, name]) => <option value={value} key={value}>{name}</option>)}</select></label></div><button className="secondary-button full-width" onClick={calibrateMap}><SoundingsIcon name="calibrate"/>Set map scale</button></> : <p className="drawer-copy">Select a segment to establish real-world scale.</p>}</details>
                 </> : <>
                   <div className="point-toolbar"><label className="point-search"><span className="sr-only">Search points</span><input type="search" value={pointSearch} placeholder="Search points" onChange={(event) => setPointSearch(event.target.value)}/></label><div className="point-filters" aria-label="Point filters">{(["all", "named", "unnamed"] as PointFilter[]).map((filter) => <button className={pointFilter === filter ? "active" : ""} key={filter} onClick={() => setPointFilter(filter)}>{filter[0].toUpperCase() + filter.slice(1)}</button>)}</div><div className="point-capture-actions"><button disabled={project.waypoints.some((point) => point.label === "A0")} onClick={() => { setTool("origin"); setActivePanel(null); setNotice("Place A0 origin on the map."); }}><SoundingsIcon name="origin"/>Place A0</button><button onClick={() => { setTool("point"); setActivePanel(null); setNotice("Place a field point on the map."); }}><SoundingsIcon name="point"/>Add point</button></div></div>
-                  <div className="survey-point-list" aria-label="Points">{filteredPoints.map((point) => { const memberships = routeMembershipsForPoint(point.id); return <button className={selectedId === point.id ? "active" : ""} key={point.id} onClick={() => { setSelectedId(point.id); setSelectedVectorId(null); setSelectedRouteId(null); }}><span className="point-list-marker">{point.symbol ? <PointSymbolImage symbol={point.symbol}/> : point.label}</span><span><b>{point.name?.trim() || point.label}</b><small>{point.name?.trim() ? point.label : "Survey junction"}{memberships.length ? ` · ${memberships.map(({ route }) => routeDisplayName(route)).join(", ")}` : " · Not assigned"}</small></span><em>{formatDepth(point, project.depthUnit)}</em></button>; })}{!filteredPoints.length && <div className="empty-panel"><SoundingsIcon name="point"/><h3>No matching points</h3><p>Change the search or filter, or add a point on the map.</p></div>}</div>
+                  <div className="survey-point-list" aria-label="Points">{filteredPoints.map((point) => { const memberships = routeMembershipsForPoint(point.id); return <button className={selectedId === point.id ? "active" : ""} key={point.id} onClick={() => { setSelectedId(point.id); setSelectedVectorId(null); setSelectedRouteId(null); setSelectedRouteVertexId(null); }}><span className="point-list-marker">{point.symbol ? <PointSymbolImage symbol={point.symbol}/> : point.label}</span><span><b>{point.name?.trim() || point.label}</b><small>{point.name?.trim() ? point.label : "Point of interest"}{memberships.length ? ` · ${memberships.map(({ route }) => routeDisplayName(route)).join(", ")}` : " · Not assigned"}</small></span><em>{formatDepth(point, project.depthUnit)}</em></button>; })}{!filteredPoints.length && <div className="empty-panel"><SoundingsIcon name="point"/><h3>No matching points</h3><p>Change the search or filter, or add a point on the map.</p></div>}</div>
                   {pointInspector}
                   <div className="survey-data-actions"><button className="secondary-button" onClick={openPointTableWindow}><SoundingsIcon name="table"/>Open data table</button><button className="secondary-button" onClick={exportFieldCapture}><SoundingsIcon name="export"/>Share field capture</button></div>
                 </>}
@@ -1319,7 +1627,7 @@ export default function ScubaMapMaker() {
                 {printArea && <p className="print-area-note">Selected area: {Math.round(printArea.width)} × {Math.round(printArea.height)} map pixels · {printPoints.length} point{printPoints.length === 1 ? "" : "s"} in PDF</p>}
                 <div className="drawer-section export-settings">
                   <h3>PDF layers</h3>
-                  <div className="export-grid">{([ ["reference", "Reference image"], ["shoreline", "Shoreline"], ["routes", "Route lines"], ["routeLabels", "Route bearings & distances"], ["routeNameLabels", "Named route labels"], ["pointMarkers", "Named point markers"], ["pointNames", "Point Names (A0, P1)"], ["fullPointNames", "Names (Swim platform)"], ["depths", "Depths"], ["contours", "Depth contours"], ["mapFurniture", "North arrow & scale"], ["pointTable", "Point detail table"] ] as Array<[ExportToggleKey, string]>).map(([setting, label]) => <label key={setting}><input type="checkbox" checked={exportSettings[setting]} onChange={(event) => setExportSetting(setting, event.target.checked)}/>{label}</label>)}</div>
+                  <div className="export-grid">{([ ["reference", "Reference image"], ["shoreline", "Shoreline"], ["routes", "Route lines"], ["routeLabels", "Route bearings & distances"], ["routeNameLabels", "Named route labels"], ["pointMarkers", "Point markers"], ["pointNames", "Point Names (A0, P1)"], ["fullPointNames", "Names (Swim platform)"], ["depths", "Depths"], ["contours", "Depth contours"], ["mapFurniture", "North arrow & scale"], ["pointTable", "Point detail table"] ] as Array<[ExportToggleKey, string]>).map(([setting, label]) => <label key={setting}><input type="checkbox" checked={exportSettings[setting]} onChange={(event) => setExportSetting(setting, event.target.checked)}/>{label}</label>)}</div>
                 </div>
                 <div className="drawer-section name-placement-section">
                   <h3>Name placement</h3>
@@ -1337,8 +1645,10 @@ export default function ScubaMapMaker() {
 
           {captureImportReview && <div className="capture-review-backdrop print-hidden" role="presentation"><section className="capture-review" role="dialog" aria-modal="true" aria-labelledby="capture-review-title"><header><div><span>Field capture merge</span><h2 id="capture-review-title">Review {captureImportReview.packageValue.sourceProjectTitle}</h2></div><button className="close-button" aria-label="Cancel field capture merge" onClick={() => setCaptureImportReview(null)}><SoundingsIcon name="close"/></button></header><div className="capture-review-body"><p>{captureImportReview.additions.length} new point{captureImportReview.additions.length === 1 ? "" : "s"} will be added. Existing desktop values remain selected unless you explicitly use a field update below.</p>{captureImportReview.conflicts.length > 0 && <fieldset><legend>Existing point conflicts</legend>{captureImportReview.conflicts.map((point) => <label key={point.id}><input type="checkbox" checked={captureConflictIds.has(point.id)} onChange={(event) => setCaptureConflictIds((current) => { const next = new Set(current); if (event.target.checked) next.add(point.id); else next.delete(point.id); return next; })}/><span><b>{point.label}{point.name ? ` · ${point.name}` : ""}</b><small>{eventualFieldDraftSummary(point.fieldDraft, project.distanceUnit)}</small></span></label>)}</fieldset>}</div><footer><button className="secondary-button" onClick={() => setCaptureImportReview(null)}>Cancel</button><button className="primary-button" onClick={applyFieldCaptureMerge}>Merge field capture</button></footer></section></div>}
 
+          {pendingDeletePoint && <div className="capture-review-backdrop print-hidden" role="presentation"><section className="capture-review" role="dialog" aria-modal="true" aria-labelledby="delete-point-title"><header><div><span>Attached point of interest</span><h2 id="delete-point-title">Delete {pendingDeletePoint.label}?</h2></div><button className="close-button" aria-label="Cancel point deletion" onClick={() => setPendingDeletePointId(null)}><SoundingsIcon name="close"/></button></header><div className="capture-review-body"><p>This point is part of route geometry. Choose whether the connected route should remain intact.</p><div className="delete-point-choices"><button className="action-row" onClick={() => removePointPreservingRoutes(pendingDeletePoint.id)}><SoundingsIcon name="point"/><span><b>Remove POI, keep routes</b><small>Preserve this location as an unlabeled route vertex.</small></span></button><button className="action-row" onClick={() => removePointAndRouteLegs(pendingDeletePoint.id)}><SoundingsIcon name="trash"/><span><b>Delete attached route legs</b><small>Remove every incident segment and normalize affected routes.</small></span></button></div></div><footer><button className="secondary-button" onClick={() => setPendingDeletePointId(null)}>Cancel</button></footer></section></div>}
+
           {visibleLayers.mapFurniture && <><div className="screen-north print-hidden"><b>N</b><svg viewBox="0 0 34 56" aria-hidden="true"><path d="M17 2 31 46 17 39 3 46 17 2Z"/><path d="m17 2 14 44-14-7V2Z"/></svg></div><div className="screen-scale print-hidden"><div className="scale-labels"><span>0</span><span>{formatNumber(mapBar.value / 2)}</span><span>{formatNumber(mapBar.value)} {project.distanceUnit}</span></div><i/></div></>}
-          <div className="zoom-controls print-hidden"><button aria-label="Zoom out" onClick={() => setZoom((value) => Math.max(0.1, value / 1.25))}>−</button><span>{Math.round(zoom * 100)}%</span><button aria-label="Zoom in" onClick={() => setZoom((value) => value * 1.25)}>＋</button><button className="recenter-button" aria-label="Recenter map" onClick={() => { setPan({ x: 22, y: 24 }); setZoom(0.78); }}><SoundingsIcon name="origin"/></button></div>
+          <div className="zoom-controls print-hidden"><button aria-label="Zoom out" onClick={() => changeMapZoom(1 / 1.25)}>−</button><span>{Math.round(zoom * 100)}%</span><button aria-label="Zoom in" onClick={() => changeMapZoom(1.25)}>＋</button><button className="recenter-button" aria-label="Recenter map" onClick={fitMapToStage}><SoundingsIcon name="origin"/></button></div>
           <div className="map-readout print-hidden"><span>{formatNumber(mapScale(project))} m / px</span><span>{project.waypoints.length} {project.waypoints.length === 1 ? "point" : "points"}</span><span>{routes.length} {routes.length === 1 ? "route" : "routes"}</span></div>
         </div>
         <section className="print-details"><h2>{project.title}</h2><p>{project.notes || "Dive-site sketch prepared with Soundings."}</p><p className="print-scale">Scale: {formatNumber(mapScale(project))} meters per map pixel · {formatNumber(mapBar.value)} {project.distanceUnit} scale bar</p><table className={exportClass(exportSettings.pointTable)}><thead><tr><th>Point</th><th>Name</th><th>Depth</th><th>Position</th></tr></thead><tbody>{printPoints.map((point) => <tr key={point.id}><td>{point.label}</td><td>{point.name || "—"}</td><td>{formatDepth(point, project.depthUnit)}</td><td>{Math.round(point.x)}, {Math.round(point.y)}</td></tr>)}</tbody></table></section>

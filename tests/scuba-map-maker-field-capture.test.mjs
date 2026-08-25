@@ -19,6 +19,29 @@ test("creates and parses a versioned field capture package", () => {
   assert.equal(parsed.points[0].fieldDraft?.bearing, 142);
 });
 
+test("keeps v2 route vertices out of the v1 POI-only field capture format", () => {
+  const packageValue = createFieldCapturePackage({
+    version: 2,
+    id: "project-v2",
+    title: "Beaver Lake",
+    waypoints: [{ id: "poi-1", label: "P1", name: "Swim platform", x: 12, y: 18, depth: 24 }],
+    routeVertices: [{ id: "vertex-1", x: 30, y: 42 }],
+    vectors: [{ id: "segment-1", fromId: "poi-1", toId: "vertex-1" }],
+    routes: [{ id: "route-1", name: "Wall", steps: [{ vectorId: "segment-1", reversed: false }] }],
+  });
+
+  assert.equal(packageValue.version, 1);
+  assert.deepEqual(packageValue.points.map(({ id }) => id), ["poi-1"]);
+  assert.equal("routeVertices" in packageValue, false);
+  assert.equal("vectors" in packageValue, false);
+  assert.equal("routes" in packageValue, false);
+
+  const parsed = parseFieldCapturePackage(JSON.parse(JSON.stringify(packageValue)));
+  assert.equal(parsed.version, 1);
+  assert.deepEqual(parsed.points.map(({ id }) => id), ["poi-1"]);
+  assert.equal("routeVertices" in parsed, false);
+});
+
 test("rejects malformed field capture packages", () => {
   assert.throws(() => parseFieldCapturePackage({ type: "soundings-field-capture", version: 2, points: [] }));
   assert.throws(() => parseFieldCapturePackage({ type: "soundings-field-capture", version: 1, sourceProjectId: "p", sourceProjectTitle: "P", points: [{ id: "bad" }] }));
