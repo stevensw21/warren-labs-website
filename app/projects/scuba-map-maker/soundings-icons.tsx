@@ -11,7 +11,7 @@ export type SoundingsIconName =
   | "image"
   | "layers"
   | "lock"
-  | "origin"
+  | "recenter"
   | "point"
   | "print-area"
   | "redo"
@@ -39,7 +39,7 @@ export function SoundingsIcon({ name, ...props }: IconProps) {
     image: <><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="9" r="1.5"/><path d="m4.5 17 4.5-4 3 2.5 3-3 4.5 4.5"/></>,
     layers: <><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5M3 16l9 5 9-5"/></>,
     lock: <><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></>,
-    origin: <><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></>,
+    recenter: <><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></>,
     point: <circle cx="12" cy="12" r="5" fill="currentColor" stroke="none"/>,
     "print-area": <><rect x="4" y="4" width="16" height="16" rx="1" strokeDasharray="3 2"/><path d="M8 2v4M16 18v4M2 8h4M18 16h4"/></>,
     redo: <><path d="m16 5 4 4-4 4"/><path d="M20 9h-9a6 6 0 0 0-6 6v2"/></>,

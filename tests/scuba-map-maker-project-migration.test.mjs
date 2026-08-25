@@ -5,15 +5,15 @@ import { migrateLegacyWaypoints } from "../app/projects/scuba-map-maker/project-
 const point = (id, label, metadata = {}) => ({ id, label, x: id.length * 10, y: id.length * 20, ...metadata });
 const vector = (id, fromId, toId) => ({ id, fromId, toId, bearing: 0, distance: 10, unit: "ft" });
 
-test("keeps A0, isolated generated points, and generated route terminals as POIs", () => {
-  const waypoints = [point("origin", "A0"), point("isolated", "P1"), point("start", "P2"), point("middle", "P3"), point("end", "P4")];
-  const vectors = [vector("one", "start", "middle"), vector("two", "middle", "end")];
+test("treats A0 as an ordinary custom label during legacy POI migration", () => {
+  const waypoints = [point("legacy-a0", "A0"), point("isolated", "P1"), point("start", "P2"), point("A0", "P3"), point("end", "P4")];
+  const vectors = [vector("one", "start", "A0"), vector("two", "A0", "end")];
 
   const migrated = migrateLegacyWaypoints(waypoints, vectors);
 
-  assert.deepEqual(migrated.waypoints.map(({ id }) => id), ["origin", "isolated", "start", "end"]);
-  assert.deepEqual(migrated.routeVertices, [{ id: "middle", x: 60, y: 120 }]);
-  assert.deepEqual(migrated.convertedPointIds, ["middle"]);
+  assert.deepEqual(migrated.waypoints.map(({ id }) => id), ["legacy-a0", "isolated", "start", "end"]);
+  assert.deepEqual(migrated.routeVertices, [{ id: "A0", x: 20, y: 40 }]);
+  assert.deepEqual(migrated.convertedPointIds, ["A0"]);
 });
 
 test("keeps every custom label and every meaningful POI metadata class", () => {

@@ -201,7 +201,6 @@ svg { display: block; }
 .waypoint:focus-visible { outline: none; }
 .point-dot { display: block; width: var(--point-dot-size, 14px); height: var(--point-dot-size, 14px); border: 0; border-radius: 50%; background: var(--map-ink); box-shadow: inset 0 0 0 var(--point-dot-border, 2px) #efffff, 0 0 0 var(--point-ring, 1px) var(--map-ink), 0 var(--point-shadow, 1px) var(--point-shadow-blur, 4px) rgba(0,0,0,.2); transition: transform 160ms ease, background 160ms ease, box-shadow 160ms ease; }
 .point-symbol-marker { display: block; width: var(--point-symbol-size, 38px); height: auto; object-fit: contain; opacity: .92; filter: drop-shadow(0 var(--point-shadow, 1px) var(--point-shadow-blur, 4px) rgba(0,0,0,.18)); mix-blend-mode: multiply; pointer-events: none; transition: transform 160ms ease, filter 160ms ease, opacity 160ms ease; }
-.waypoint.origin .point-dot { background: var(--coral); box-shadow: inset 0 0 0 var(--point-dot-border, 2px) #efffff, 0 0 0 var(--point-origin-ring, 2px) rgba(255,255,255,.9), 0 0 0 calc(var(--point-origin-ring, 2px) + var(--point-ring, 1px)) var(--coral); }
 .waypoint.selected .point-dot { background: var(--coral); transform: scale(1.15); box-shadow: inset 0 0 0 var(--point-dot-border, 2px) #efffff, 0 0 0 var(--point-origin-ring, 2px) rgba(255,255,255,.9), 0 0 0 calc(var(--point-origin-ring, 2px) + var(--point-selected-ring, 3px)) rgba(255,103,85,.6); }
 .named-point:focus-visible .point-dot { box-shadow: inset 0 0 0 var(--point-dot-border, 2px) #efffff, 0 0 0 var(--point-origin-ring, 2px) rgba(255,255,255,.9), 0 0 0 calc(var(--point-origin-ring, 2px) + var(--point-selected-ring, 3px)) rgba(255,103,85,.6); }
 .waypoint.selected .point-symbol-marker, .waypoint:focus-visible .point-symbol-marker { opacity: 1; filter: drop-shadow(0 0 var(--point-selected-ring, 3px) rgba(255,103,85,.95)) drop-shadow(0 0 var(--point-origin-ring, 2px) white); transform: scale(1.08); }
@@ -244,8 +243,16 @@ svg { display: block; }
 .print-crop-furniture, .print-details { display: none; }
 @media screen { .map-canvas > .map-furniture { display: none; } }
 
-.tool-dock { position: absolute; z-index: 42; top: 59%; left: 108px; display: grid; width: 102px; padding: 8px 0; overflow: hidden; border: 1px solid var(--divider); border-radius: 7px; background: linear-gradient(180deg, rgba(7,27,41,.98), rgba(11,34,49,.98)); box-shadow: var(--shadow); transform: translateY(-50%); }
-.dock-button { position: relative; display: grid; grid-template-columns: 28px 1fr; align-items: center; gap: 8px; min-height: 58px; width: 100%; padding: 0 9px 0 14px; border: 0; background: transparent; color: var(--on-dark-muted); font-size: 11px; font-weight: 550; text-align: left; }
+.tool-dock { position: absolute; z-index: 42; top: 59%; left: 108px; display: grid; width: 128px; padding: 0 0 8px; overflow: hidden; border: 1px solid var(--divider); border-radius: 7px; background: linear-gradient(180deg, rgba(7,27,41,.98), rgba(11,34,49,.98)); box-shadow: var(--shadow); transform: translateY(-50%); }
+.tool-dock.positioned { z-index: 63; top: var(--tool-dock-top); right: auto; bottom: auto; left: var(--tool-dock-left); transform: none; }
+.tool-dock.dragging { z-index: 64; user-select: none; }
+.tool-dock-handle { display: grid; place-items: center; width: 100%; min-height: 30px; padding: 0; border: 0; border-bottom: 1px solid var(--divider); background: rgba(255,255,255,.025); color: var(--on-dark-muted); touch-action: none; cursor: grab; }
+.tool-dock-handle:hover, .tool-dock-handle:focus-visible { background: rgba(255,255,255,.06); color: var(--on-dark); }
+.tool-dock-handle:active, .tool-dock.dragging .tool-dock-handle { cursor: grabbing; }
+.tool-dock-grip { display: grid; grid-template-columns: repeat(3, 3px); gap: 3px; }
+.tool-dock-grip i { width: 3px; height: 3px; border-radius: 50%; background: currentColor; }
+.dock-button { position: relative; display: grid; grid-template-columns: 28px minmax(0, 1fr); align-items: center; gap: 8px; min-width: 0; min-height: 58px; width: 100%; padding: 0 9px 0 14px; border: 0; background: transparent; color: var(--on-dark-muted); font-size: 11px; font-weight: 550; text-align: left; }
+.dock-button > span { min-width: 0; line-height: 1.2; white-space: nowrap; }
 .dock-button::before { content: ""; position: absolute; inset: 7px auto 7px 0; width: 3px; border-radius: 0 2px 2px 0; background: transparent; }
 .dock-button svg { width: 23px; height: 23px; }
 .dock-button:not(:disabled):hover { color: var(--on-dark); background: rgba(255,255,255,.035); }
@@ -482,7 +489,7 @@ svg { display: block; }
 .point-filters, .point-capture-actions { display: flex; gap: 6px; }
 .point-filters button, .point-capture-actions button { min-height: 36px; padding: 0 11px; border: 1px solid var(--divider); border-radius: 4px; background: transparent; color: var(--on-dark-muted); font-size: 10px; font-weight: 700; }
 .point-filters button.active { border-color: #29bac1; background: rgba(41,186,193,.16); color: var(--on-dark); }
-.point-capture-actions { display: grid; grid-template-columns: 1fr 1fr; }
+.point-capture-actions { display: grid; grid-template-columns: 1fr; }
 .point-capture-actions button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; color: var(--on-dark); }
 .point-capture-actions svg { width: 17px; height: 17px; }
 .survey-point-list { display: grid; border: 1px solid var(--divider); border-radius: 4px; overflow: hidden; }
@@ -571,7 +578,8 @@ svg { display: block; }
   .save-state { display: none; }
   .topbar { grid-template-columns: minmax(0, 1fr) auto; }
   .rail-button { min-height: 70px; }
-  .tool-dock { top: auto; bottom: 18px; left: 50%; display: flex; width: auto; max-width: calc(100% - 250px); padding: 0 6px; overflow-x: auto; transform: translateX(-50%); }
+  .tool-dock, .tool-dock.positioned { z-index: 42; top: auto; right: auto; bottom: 18px; left: 50%; display: flex; width: auto; max-width: calc(100% - 250px); padding: 0 6px; overflow-x: auto; transform: translateX(-50%); }
+  .tool-dock-handle { display: none; }
   .dock-button { grid-template-columns: 22px auto; min-width: 92px; min-height: 54px; padding: 0 10px; }
   .dock-button::before { inset: auto 8px 0; width: auto; height: 3px; }
   .dock-button svg { width: 20px; height: 20px; }
@@ -603,7 +611,7 @@ svg { display: block; }
   .top-actions .export-button { min-width: 44px; width: 44px; margin-left: 2px; }
   .map-stage::after { opacity: .45; }
   .map-canvas { background-size: 64px 64px, 64px 64px, 100% 100%; }
-  .tool-dock { top: 70px; right: 8px; bottom: auto; left: auto; display: grid; width: 52px; max-width: none; padding: 4px 0; overflow: hidden; transform: none; }
+  .tool-dock, .tool-dock.positioned { top: 70px; right: 8px; bottom: auto; left: auto; display: grid; width: 52px; max-width: none; padding: 4px 0; overflow: hidden; transform: none; }
   .dock-button { display: grid; grid-template-columns: 1fr; justify-items: center; min-width: 0; min-height: 52px; padding: 4px; font-size: 0; text-align: center; }
   .dock-button span { display: none; }
   .dock-button::before { inset: 7px auto 7px 0; width: 3px; height: auto; }

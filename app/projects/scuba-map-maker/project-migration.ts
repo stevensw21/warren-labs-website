@@ -85,9 +85,7 @@ export function migrateLegacyWaypoints<W extends LegacyWaypoint, V extends Legac
       || (typeof point.depth === "number" && Number.isFinite(point.depth))
       || hasNonemptyFieldDraft(point.fieldDraft)
       || (point.labelOffsets !== undefined && point.labelOffsets !== null);
-    const convert = point.label !== "A0"
-      && point.id !== "A0"
-      && generatedLabel
+    const convert = generatedLabel
       && !hasPoiMetadata
       && degree >= 2;
 

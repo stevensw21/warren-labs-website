@@ -41,7 +41,7 @@ test("ships the Warren Labs local-first Scuba Map Maker", async () => {
   ]);
 
   assert.match(page, /indexedDB\.open/);
-  assert.match(page, /Place A0 origin/);
+  assert.doesNotMatch(page, /\bA0\b/);
   assert.match(page, /Print \/ Save PDF/);
   assert.match(page, /Download backup/);
   assert.match(page, /Upload reference image/);
@@ -125,6 +125,34 @@ test("ships the Warren Labs local-first Scuba Map Maker", async () => {
   assert.doesNotMatch(packageJson, /"react-loading-skeleton"\s*:/);
 });
 
+test("keeps the desktop map toolbox readable, movable, and session-only", async () => {
+  const [page, styles] = await Promise.all([
+    readFile(new URL("../app/projects/scuba-map-maker/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(page, /type DockDrag = \{ pointerId: number; offsetX: number; offsetY: number \}/);
+  assert.match(page, /useState<DockPosition \| null>\(null\)/);
+  assert.match(page, /clampDockPosition\(/);
+  assert.match(page, /aria-label="Move map tools"/);
+  assert.match(page, /aria-describedby="tool-dock-help"/);
+  assert.match(page, /event\.button !== 0 \|\| !event\.isPrimary/);
+  assert.match(page, /onPointerDown=\{startDockDrag\} onPointerMove=\{moveDock\} onPointerUp=\{finishDockDrag\} onPointerCancel=\{finishDockDrag\}/);
+  assert.match(page, /onWheel=\{\(event\) => event\.stopPropagation\(\)\}/);
+  assert.match(page, /event\.key === "Home"/);
+  assert.match(page, /event\.shiftKey \? 32 : 8/);
+  assert.doesNotMatch(page, /localStorage[\s\S]{0,80}tool.dock/i);
+
+  assert.match(styles, /\.tool-dock \{[^}]*width:\s*128px;/);
+  assert.match(styles, /\.tool-dock\.positioned \{[^}]*z-index:\s*63;[^}]*top:\s*var\(--tool-dock-top\);[^}]*left:\s*var\(--tool-dock-left\);[^}]*transform:\s*none;/);
+  assert.match(styles, /\.tool-dock-handle \{[^}]*touch-action:\s*none;[^}]*cursor:\s*grab;/);
+  assert.match(styles, /\.dock-button \{[^}]*grid-template-columns:\s*28px minmax\(0, 1fr\);[^}]*min-width:\s*0;/);
+  assert.match(styles, /\.dock-button > span \{[^}]*line-height:\s*1\.2;[^}]*white-space:\s*nowrap;/);
+  assert.match(styles, /@media \(max-width: 1199px\)[\s\S]*\.tool-dock-handle \{ display: none; \}/);
+  assert.match(styles, /@media \(max-width: 767px\)[\s\S]*\.tool-dock, \.tool-dock\.positioned \{[^}]*width:\s*52px;/);
+  assert.match(styles, /@media print[\s\S]*\.tool-dock[^\n]*display: none !important;/);
+});
+
 test("keeps PDF print-area controls screen-sized across editor zoom", async () => {
   const [page, styles] = await Promise.all([
     readFile(new URL("../app/projects/scuba-map-maker/page.tsx", import.meta.url), "utf8"),
@@ -205,7 +233,7 @@ test("separates editable route vertices from point-of-interest detail layers", a
   assert.match(page, /point-symbol-cell/);
   assert.match(page, /normalizePointSymbol\(point\.symbol\)/);
   assert.match(page, /smart-callout-anchor-symbol/);
-  assert.match(page, /Point Names \(A0, P1\)/);
+  assert.match(page, /Point Names \(P1, P2\)/);
   assert.match(page, /Names \(Swim platform\)/);
   assert.match(page, /Depths/);
   assert.doesNotMatch(page, /Only points with a full Name|Named point markers/);
@@ -262,7 +290,7 @@ test("ships v2 named route drawing across editor, map, backup, and PDF surfaces"
   assert.match(page, /DockButton icon="route" label="Draw Route"/);
   assert.match(page, /className=\{`dock-button\$\{active \? " active" : ""\}`\} aria-label=\{label\}/);
   assert.match(page, /const beginRouteDrawing/);
-  assert.match(page, /Place the required A0 origin before drawing routes\./);
+  assert.doesNotMatch(blockAt(page, "const beginRouteDrawing").text, /waypoints|setTool\("origin"\)|required origin/i);
   assert.match(page, /Draw a route: click each vertex, then Finish\. Every crossing becomes a junction\./);
   assert.match(page, /const routeDraftPath = routeDraft && routeDraft\.points\.length > 1/);
   assert.match(page, /const routeDraftPreviewPath = routeDraft\?\.points\.length && routeDraftPointer/);
