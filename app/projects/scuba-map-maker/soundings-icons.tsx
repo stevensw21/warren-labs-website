@@ -7,6 +7,7 @@ export type SoundingsIconName =
   | "duplicate"
   | "export"
   | "eye"
+  | "feature"
   | "folder"
   | "image"
   | "layers"
@@ -35,6 +36,7 @@ export function SoundingsIcon({ name, ...props }: IconProps) {
     duplicate: <><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></>,
     export: <><path d="M12 16V3m0 0L7.5 7.5M12 3l4.5 4.5"/><path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7"/></>,
     eye: <><path d="M2.5 12s3.5-5 9.5-5 9.5 5 9.5 5-3.5 5-9.5 5-9.5-5-9.5-5Z"/><circle cx="12" cy="12" r="2.5"/></>,
+    feature: <><path d="M3 17c2.8-6.2 5.6-8.8 8.5-7.8 2.6.9 2.8 4.1 5.2 3.3 1.8-.6 2.5-3.1 4.3-5.5"/><path d="M4 21c3.2-2.9 6.5-3.8 9.6-2.2 2.2 1.1 4.4.7 6.4-.8"/></>,
     folder: <path d="M3 7.5h7l2-2h4.5a2.5 2.5 0 0 1 2.5 2.5v1H3V7.5Zm0 1.5h18l-1.5 9H4.5L3 9Z"/>,
     image: <><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="9" r="1.5"/><path d="m4.5 17 4.5-4 3 2.5 3-3 4.5 4.5"/></>,
     layers: <><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5M3 16l9 5 9-5"/></>,

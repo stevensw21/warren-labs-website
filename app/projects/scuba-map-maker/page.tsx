@@ -27,6 +27,18 @@ import { collapseRouteVertex, deleteRouteSegment, deleteSavedRoute, insertRouteM
 import { planarizeRouteTopology } from "./route-topology";
 import { buildRouteNetwork, type RoutePath } from "./route-network";
 import {
+  DEFAULT_GEOGRAPHIC_FEATURE_STYLE,
+  geographicFeatureLabelAnchor,
+  geographicFeaturePath,
+  normalizeGeographicFeatures,
+  simplifyFreehandPoints,
+  translateGeographicFeature,
+  type FeaturePoint,
+  type GeographicFeature,
+  type GeographicFeatureDash,
+  type GeographicFeatureMode,
+} from "./geographic-features";
+import {
   normalizeRoutes,
   reverseRoute,
   routeEndpoints,
@@ -48,27 +60,29 @@ type PrintArea = { x: number; y: number; width: number; height: number };
 type ReferenceImage = { dataUrl?: string; opacity: number; scale: number; x: number; y: number; visible: boolean; locked: boolean };
 type Calibration = { vectorId?: string; distance?: number; unit?: Unit; metersPerPixel: number };
 type NamePlacement = "smartCallouts" | "asPositioned";
-type ExportSettings = { reference: boolean; shoreline: boolean; routes: boolean; routeLabels: boolean; routeNameLabels: boolean; pointMarkers: boolean; namedPointMarkersOnly: boolean; pointNames: boolean; fullPointNames: boolean; depths: boolean; contours: boolean; mapFurniture: boolean; pointTable: boolean; namePlacement?: NamePlacement };
+type ExportSettings = { reference: boolean; shoreline: boolean; geographicFeatures: boolean; geographicFeatureLabels: boolean; routes: boolean; routeLabels: boolean; routeNameLabels: boolean; pointMarkers: boolean; namedPointMarkersOnly: boolean; pointNames: boolean; fullPointNames: boolean; depths: boolean; contours: boolean; mapFurniture: boolean; pointTable: boolean; namePlacement?: NamePlacement };
 type ExportToggleKey = Exclude<keyof ExportSettings, "namePlacement">;
 type Project = {
   version: 2; id: string; title: string; date: string; notes: string; distanceUnit: Unit; depthUnit: Unit;
-  coastline: CoastPoint[]; shoreLocked?: boolean; waypoints: Point[]; routeVertices: RouteVertex[]; vectors: Vector[]; routes?: SavedRoute[]; reference: ReferenceImage; calibration?: Calibration; exportSettings?: ExportSettings; printArea?: PrintArea; pointSymbolScale?: number;
+  coastline: CoastPoint[]; shoreLocked?: boolean; geographicFeatures: GeographicFeature[]; waypoints: Point[]; routeVertices: RouteVertex[]; vectors: Vector[]; routes?: SavedRoute[]; reference: ReferenceImage; calibration?: Calibration; exportSettings?: ExportSettings; printArea?: PrintArea; pointSymbolScale?: number;
 };
-type StoredProject = Omit<Project, "version" | "routeVertices"> & { version: 1 | 2; routeVertices?: RouteVertex[] };
+type StoredProject = Omit<Project, "version" | "routeVertices" | "geographicFeatures"> & { version: 1 | 2; routeVertices?: RouteVertex[]; geographicFeatures?: unknown };
 type ProjectSyncMessage =
   | { type: "project-update"; protocol: 2; source: string; project: Project }
   | { type: "project-request"; protocol: 2; source: string; projectId: string };
-type Tool = "select" | "coast" | "point" | "route" | "reference" | "printArea";
+type Tool = "select" | "coast" | "feature" | "point" | "route" | "reference" | "printArea";
 type ActivePanel = "projects" | "survey" | "settings" | "export" | null;
-type SurveyTab = "routes" | "points";
+type SurveyTab = "routes" | "points" | "features";
 type PointFilter = "all" | "named" | "unnamed";
 type CaptureImportReview = { packageValue: FieldCapturePackage; additions: CapturedPoint[]; conflicts: CapturedPoint[] };
-type LayerVisibility = { shoreline: boolean; routes: boolean; routeLabels: boolean; pointNames: boolean; names: boolean; depths: boolean; contours: boolean; mapFurniture: boolean };
+type LayerVisibility = { shoreline: boolean; geographicFeatures: boolean; geographicFeatureLabels: boolean; routes: boolean; routeLabels: boolean; pointNames: boolean; names: boolean; depths: boolean; contours: boolean; mapFurniture: boolean };
 type PrintAreaHandle = "move" | "nw" | "ne" | "se" | "sw";
-type Drag = { kind: "waypoint" | "routeVertex" | "annotation" | "coast" | "pan" | "reference" | "printAreaDraw" | "printAreaAdjust"; id?: string; annotationKind?: PointAnnotationKind; offset?: LabelOffset; initialOffset?: LabelOffset; hadOffset?: boolean; moved?: boolean; changed?: boolean; originX?: number; originY?: number; start: Project; x: number; y: number; point?: { x: number; y: number }; area?: PrintArea; handle?: PrintAreaHandle };
+type DragDetails = { id?: string; pointId?: string; annotationKind?: PointAnnotationKind; offset?: LabelOffset; initialOffset?: LabelOffset; hadOffset?: boolean; moved?: boolean; changed?: boolean; originX?: number; originY?: number; start: Project; x: number; y: number; point?: { x: number; y: number }; area?: PrintArea; handle?: PrintAreaHandle };
+type Drag = ({ kind: "waypoint" | "routeVertex" | "annotation" | "coast" | "pan" | "reference" | "printAreaDraw" | "printAreaAdjust" } | { kind: "feature" | "featureAnchor" | "featureFreehand" }) & DragDetails;
 type DockDrag = { pointerId: number; offsetX: number; offsetY: number };
 type DraftRoutePoint = { x: number; y: number; nodeId?: string };
 type RouteDraft = { points: DraftRoutePoint[]; name: string; extendRouteId?: string; extendAt?: "start" | "end" };
+type FeatureDraft = { mode: GeographicFeatureMode; points: FeaturePoint[]; closed: boolean; redrawFeatureId?: string };
 
 const DB_NAME = "dive-map-builder";
 const STORE_NAME = "projects";
@@ -84,14 +98,16 @@ const DEFAULT_METERS_PER_PIXEL = 0.5;
 const METERS_PER_UNIT: Record<Unit, number> = { ft: 0.3048, m: 1, mi: 1609.344 };
 const UNIT_LABEL: Record<Unit, string> = { ft: "feet", m: "meters", mi: "miles" };
 const POINT_ANNOTATION_LABELS: Record<PointAnnotationKind, string> = { pointName: "Point Name", name: "Name", depth: "Depth" };
-const DEFAULT_EXPORT_SETTINGS: ExportSettings = { reference: true, shoreline: true, routes: true, routeLabels: true, routeNameLabels: true, pointMarkers: true, namedPointMarkersOnly: false, pointNames: true, fullPointNames: true, depths: true, contours: true, mapFurniture: true, pointTable: true, namePlacement: "smartCallouts" };
+const GEOGRAPHIC_FEATURE_MODE_LABELS: Record<GeographicFeatureMode, string> = { freehand: "Freehand", spline: "Smooth spline", polyline: "Connected line" };
+const GEOGRAPHIC_FEATURE_DASH_LABELS: Record<GeographicFeatureDash, string> = { solid: "Solid", dashed: "Dashed", dotted: "Dotted" };
+const DEFAULT_EXPORT_SETTINGS: ExportSettings = { reference: true, shoreline: true, geographicFeatures: true, geographicFeatureLabels: true, routes: true, routeLabels: true, routeNameLabels: true, pointMarkers: true, namedPointMarkersOnly: false, pointNames: true, fullPointNames: true, depths: true, contours: true, mapFurniture: true, pointTable: true, namePlacement: "smartCallouts" };
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value));
 const id = () => (typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`);
 const round = (value: number, precision = 2) => Math.round(value * 10 ** precision) / 10 ** precision;
 const formatNumber = (value: number) => new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(value);
 const emptyProject = (title = "Untitled dive site"): Project => ({
   version: 2, id: id(), title, date: new Date().toISOString().slice(0, 10), notes: "", distanceUnit: "ft", depthUnit: "ft",
-  coastline: [], shoreLocked: false, waypoints: [], routeVertices: [], vectors: [], routes: [], calibration: { metersPerPixel: DEFAULT_METERS_PER_PIXEL }, exportSettings: { ...DEFAULT_EXPORT_SETTINGS },
+  coastline: [], shoreLocked: false, geographicFeatures: [], waypoints: [], routeVertices: [], vectors: [], routes: [], calibration: { metersPerPixel: DEFAULT_METERS_PER_PIXEL }, exportSettings: { ...DEFAULT_EXPORT_SETTINGS },
   pointSymbolScale: DEFAULT_POINT_SYMBOL_SCALE,
   reference: { opacity: 0.48, scale: 1, x: 0, y: 0, visible: true, locked: false },
 });
@@ -124,7 +140,7 @@ function normalizePrintArea(area?: Partial<PrintArea>): PrintArea | undefined {
   return { x: left, y: top, width: right - left, height: bottom - top };
 }
 function printAreaFromPoints(start: { x: number; y: number }, end: { x: number; y: number }) { return normalizePrintArea({ x: start.x, y: start.y, width: end.x - start.x, height: end.y - start.y }); }
-function pointInPrintArea(point: Point, area?: PrintArea) { return !area || (point.x >= area.x && point.x <= area.x + area.width && point.y >= area.y && point.y <= area.y + area.height); }
+function pointInPrintArea(point: { x: number; y: number }, area?: PrintArea) { return !area || (point.x >= area.x && point.x <= area.x + area.width && point.y >= area.y && point.y <= area.y + area.height); }
 function projectedPointOnSegment(point: { x: number; y: number }, start: { x: number; y: number }, end: { x: number; y: number }) {
   const dx = end.x - start.x;
   const dy = end.y - start.y;
@@ -266,6 +282,7 @@ function normalizeProject(raw: StoredProject | Project): Project {
   project.distanceUnit = project.distanceUnit in METERS_PER_UNIT ? project.distanceUnit : "ft";
   project.depthUnit = project.depthUnit in METERS_PER_UNIT ? project.depthUnit : "ft";
   project.coastline = Array.isArray(project.coastline) ? project.coastline : [];
+  project.geographicFeatures = normalizeGeographicFeatures(stored.geographicFeatures, id);
   const savedReference = project.reference ?? ({} as Partial<ReferenceImage>);
   project.reference = { dataUrl: savedReference.dataUrl, opacity: savedReference.opacity ?? 0.48, scale: savedReference.scale ?? 1, x: savedReference.x ?? 0, y: savedReference.y ?? 0, visible: savedReference.visible ?? true, locked: savedReference.locked ?? false };
   project.waypoints = (project.waypoints ?? []).map((point) => {
@@ -401,6 +418,10 @@ export default function ScubaMapMaker() {
   const [redoStack, setRedoStack] = useState<Project[]>([]);
   const [routeDraft, setRouteDraft] = useState<RouteDraft | null>(null);
   const [routeDraftPointer, setRouteDraftPointer] = useState<DraftRoutePoint | null>(null);
+  const [featureModePickerOpen, setFeatureModePickerOpen] = useState(false);
+  const [featureDraft, setFeatureDraft] = useState<FeatureDraft | null>(null);
+  const [featureDraftPointer, setFeatureDraftPointer] = useState<FeaturePoint | null>(null);
+  const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null);
   const [selectedRouteVertexId, setSelectedRouteVertexId] = useState<string | null>(null);
   const [pendingDeletePointId, setPendingDeletePointId] = useState<string | null>(null);
   const [calibrationForm, setCalibrationForm] = useState({ distance: "", unit: "ft" as Unit });
@@ -416,7 +437,7 @@ export default function ScubaMapMaker() {
   const [saveState, setSaveState] = useState("Saved locally");
   const [dockPosition, setDockPosition] = useState<DockPosition | null>(null);
   const [dockDragging, setDockDragging] = useState(false);
-  const [visibleLayers, setVisibleLayers] = useState<LayerVisibility>({ shoreline: true, routes: true, routeLabels: true, pointNames: true, names: true, depths: true, contours: true, mapFurniture: true });
+  const [visibleLayers, setVisibleLayers] = useState<LayerVisibility>({ shoreline: true, geographicFeatures: true, geographicFeatureLabels: true, routes: true, routeLabels: true, pointNames: true, names: true, depths: true, contours: true, mapFurniture: true });
   const [pointTableProjectId] = useState(() => typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("point-table") : null);
   const pointTableOnly = Boolean(pointTableProjectId);
   const stageRef = useRef<HTMLDivElement>(null);
@@ -429,6 +450,8 @@ export default function ScubaMapMaker() {
   const syncChannel = useRef<BroadcastChannel | null>(null);
   const pointTableWindow = useRef<Window | null>(null);
   const projectRef = useRef<Project | null>(null);
+  const featureDraftRef = useRef<FeatureDraft | null>(null);
+  const finishFeatureDrawingRef = useRef<() => void>(() => undefined);
   const windowId = useRef(id());
 
   const fitMapToStage = useCallback(() => {
@@ -450,6 +473,16 @@ export default function ScubaMapMaker() {
       return next;
     });
   }, []);
+  const replaceFeatureDraft = (next: FeatureDraft | null) => {
+    featureDraftRef.current = next;
+    setFeatureDraft(next);
+  };
+  const reviseFeatureDraft = (transform: (current: FeatureDraft | null) => FeatureDraft | null) => {
+    const next = transform(featureDraftRef.current);
+    featureDraftRef.current = next;
+    setFeatureDraft(next);
+    return next;
+  };
   const measuredDockPosition = useCallback((): DockPosition | null => {
     const stage = stageRef.current;
     const dock = dockRef.current;
@@ -629,9 +662,40 @@ export default function ScubaMapMaker() {
   useEffect(() => { zoomRef.current = zoom; }, [zoom]);
   useEffect(() => {
     const panWithArrowKeys = (event: KeyboardEvent) => {
-      if (event.key === "Escape") { setRouteDraft(null); setRouteDraftPointer(null); setTool("select"); setActivePanel(null); setSelectedId(null); setSelectedVectorId(null); setSelectedRouteId(null); setSelectedRouteVertexId(null); return; }
+      if (event.key === "Escape") {
+        featureDraftRef.current = null;
+        setFeatureDraft(null);
+        setFeatureDraftPointer(null);
+        setFeatureModePickerOpen(false);
+        setRouteDraft(null);
+        setRouteDraftPointer(null);
+        setTool("select");
+        setActivePanel(null);
+        setSelectedId(null);
+        setSelectedVectorId(null);
+        setSelectedRouteId(null);
+        setSelectedRouteVertexId(null);
+        setSelectedFeatureId(null);
+        return;
+      }
       const target = event.target;
       if (target instanceof HTMLElement && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName))) return;
+      const activeFeatureDraft = featureDraftRef.current;
+      if (activeFeatureDraft && activeFeatureDraft.mode !== "freehand") {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          finishFeatureDrawingRef.current();
+          return;
+        }
+        if (event.key === "Backspace") {
+          event.preventDefault();
+          const next = { ...activeFeatureDraft, points: activeFeatureDraft.points.slice(0, -1) };
+          featureDraftRef.current = next;
+          setFeatureDraft(next);
+          setFeatureDraftPointer(null);
+          return;
+        }
+      }
       const step = event.shiftKey ? 180 : 60;
       const offsets: Record<string, { x: number; y: number }> = {
         ArrowUp: { x: 0, y: step }, ArrowDown: { x: 0, y: -step }, ArrowLeft: { x: step, y: 0 }, ArrowRight: { x: -step, y: 0 },
@@ -667,6 +731,7 @@ export default function ScubaMapMaker() {
 
   const selected = project?.waypoints.find((point) => point.id === selectedId) ?? null;
   const pendingDeletePoint = project?.waypoints.find((point) => point.id === pendingDeletePointId) ?? null;
+  const selectedFeature = project?.geographicFeatures.find((feature) => feature.id === selectedFeatureId) ?? null;
   const selectedRouteVertex = project?.routeVertices.find((vertex) => vertex.id === selectedRouteVertexId) ?? null;
   const selectedVector = project?.vectors.find((vector) => vector.id === selectedVectorId) ?? null;
   const routes = project?.routes ?? [];
@@ -694,6 +759,7 @@ export default function ScubaMapMaker() {
   const routeDisplayName = (route: SavedRoute) => route.name.trim() || routeFallbackName(route);
   const focusRoute = (route: SavedRoute, openDrawer = true, vectorId?: string) => {
     setSelectedRouteId(route.id);
+    setSelectedFeatureId(null);
     const nextVectorId = vectorId && route.steps.some((step) => step.vectorId === vectorId) ? vectorId : route.steps[0]?.vectorId;
     setSelectedVectorId(nextVectorId ?? null);
     if (nextVectorId && project) {
@@ -743,10 +809,11 @@ export default function ScubaMapMaker() {
     if (!project || !redoStack.length) return;
     const next = redoStack[redoStack.length - 1]; setRedoStack((items) => items.slice(0, -1)); setUndoStack((items) => [...items, clone(project)]); update(next, false); setNotice("Restored map edit.");
   };
-  const canvasPosition = (event: PointerEvent<HTMLElement>) => {
+  const canvasPosition = (event: PointerEvent<Element>) => {
     const rect = stageRef.current!.getBoundingClientRect();
     return { x: Math.max(0, Math.min(CANVAS.width, (event.clientX - rect.left - pan.x) / zoom)), y: Math.max(0, Math.min(CANVAS.height, (event.clientY - rect.top - pan.y) / zoom)) };
   };
+  const featurePointAt = (position: { x: number; y: number }): FeaturePoint => ({ id: id(), x: position.x, y: position.y });
   const snapRoutePoint = (current: Project, position: { x: number; y: number }): DraftRoutePoint => {
     const threshold = 18 / zoom;
     const nearbyNode = routeNodes(current)
@@ -788,6 +855,7 @@ export default function ScubaMapMaker() {
   };
   const addPointOfInterest = (position: { x: number; y: number }) => {
     if (!project) return;
+    setSelectedFeatureId(null);
     const snapped = snapRoutePoint(project, position);
     const existingPoint = snapped.nodeId ? project.waypoints.find((point) => point.id === snapped.nodeId) : undefined;
     if (existingPoint) {
@@ -813,6 +881,102 @@ export default function ScubaMapMaker() {
     setActivePanel("survey");
     setNotice(snapped.nodeId ? `${label} added by promoting the route vertex to a point of interest.` : `${label} added and attached to any route at that location.`);
   };
+  const selectGeographicFeature = (featureId: string, openDrawer = true) => {
+    setSelectedFeatureId(featureId);
+    setSelectedId(null);
+    setSelectedVectorId(null);
+    setSelectedRouteId(null);
+    setSelectedRouteVertexId(null);
+    setTool("select");
+    if (openDrawer) {
+      setSurveyTab("features");
+      setActivePanel("survey");
+    }
+  };
+  const openFeatureModePicker = () => {
+    setRouteDraft(null);
+    setRouteDraftPointer(null);
+    replaceFeatureDraft(null);
+    setFeatureDraftPointer(null);
+    setTool("select");
+    setActivePanel(null);
+    setFeatureModePickerOpen(true);
+    setNotice("Choose how to draw a geographic map feature.");
+  };
+  const beginFeatureDrawing = (mode: GeographicFeatureMode, redrawFeatureId?: string) => {
+    const redrawFeature = redrawFeatureId ? project?.geographicFeatures.find((feature) => feature.id === redrawFeatureId) : undefined;
+    const draft = { mode, points: [], closed: redrawFeature?.closed ?? false, redrawFeatureId } satisfies FeatureDraft;
+    setRouteDraft(null);
+    setRouteDraftPointer(null);
+    replaceFeatureDraft(draft);
+    setFeatureDraftPointer(null);
+    setFeatureModePickerOpen(false);
+    setTool("feature");
+    setActivePanel(null);
+    setSelectedId(null);
+    setSelectedVectorId(null);
+    setSelectedRouteId(null);
+    setSelectedRouteVertexId(null);
+    setSelectedFeatureId(redrawFeatureId ?? null);
+    setNotice(mode === "freehand" ? "Press and drag to sketch the feature. Release to finish." : `${GEOGRAPHIC_FEATURE_MODE_LABELS[mode]}: click each anchor, then Finish. Click the first anchor to close the loop.`);
+  };
+  const cancelFeatureDrawing = () => {
+    replaceFeatureDraft(null);
+    setFeatureDraftPointer(null);
+    setFeatureModePickerOpen(false);
+    setTool("select");
+    setNotice("Map feature draft canceled. No project geometry changed.");
+  };
+  const undoFeatureDraftPoint = () => {
+    reviseFeatureDraft((draft) => draft ? { ...draft, points: draft.points.slice(0, -1) } : null);
+    setFeatureDraftPointer(null);
+  };
+  const commitFeatureDraft = (draft: FeatureDraft, closedOverride = draft.closed) => {
+    if (!project) return;
+    const capturedPoints = draft.mode === "freehand" ? simplifyFreehandPoints(draft.points, 1.5 / zoom) : draft.points.map((point) => ({ ...point }));
+    const points = capturedPoints.filter((point, index) => index === 0 || Math.hypot(point.x - capturedPoints[index - 1].x, point.y - capturedPoints[index - 1].y) > 1e-6);
+    const totalLength = points.slice(1).reduce((sum, point, index) => sum + Math.hypot(point.x - points[index].x, point.y - points[index].y), 0);
+    if (points.length < 2 || totalLength * zoom < 4) {
+      replaceFeatureDraft(null);
+      setFeatureDraftPointer(null);
+      setTool("select");
+      setNotice("Draw a longer feature before finishing.");
+      return;
+    }
+    const closed = Boolean(closedOverride && points.length >= 3);
+    const committedFeatureId = draft.redrawFeatureId ?? id();
+    mutate((current) => {
+      const existingIndex = draft.redrawFeatureId ? current.geographicFeatures.findIndex((feature) => feature.id === draft.redrawFeatureId) : -1;
+      if (existingIndex >= 0) {
+        const existing = current.geographicFeatures[existingIndex];
+        current.geographicFeatures[existingIndex] = { ...existing, mode: draft.mode, points, closed };
+      } else {
+        current.geographicFeatures.push({
+          id: committedFeatureId,
+          name: "",
+          mode: draft.mode,
+          points,
+          closed,
+          style: { ...DEFAULT_GEOGRAPHIC_FEATURE_STYLE },
+        });
+      }
+      return current;
+    });
+    replaceFeatureDraft(null);
+    setFeatureDraftPointer(null);
+    setFeatureModePickerOpen(false);
+    setTool("select");
+    setSelectedFeatureId(committedFeatureId);
+    setSurveyTab("features");
+    setActivePanel("survey");
+    setNotice(draft.redrawFeatureId ? "Freehand geometry replaced; its name and style were preserved." : `${GEOGRAPHIC_FEATURE_MODE_LABELS[draft.mode]} feature added to the map.`);
+  };
+  const finishFeatureDrawing = () => {
+    const draft = featureDraftRef.current;
+    if (!draft || draft.mode === "freehand") return;
+    commitFeatureDraft(draft);
+  };
+  finishFeatureDrawingRef.current = finishFeatureDrawing;
   const onStagePointerDown = (event: PointerEvent<HTMLDivElement>) => {
     if (!project || event.button !== 0) return;
     if (drag.current) return;
@@ -822,6 +986,29 @@ export default function ScubaMapMaker() {
     if (tool === "reference" && project.reference.dataUrl && !project.reference.locked) { drag.current = { kind: "reference", start: clone(project), x: event.clientX, y: event.clientY }; event.currentTarget.setPointerCapture(event.pointerId); return; }
     const position = canvasPosition(event);
     if (tool === "printArea") { event.preventDefault(); drag.current = { kind: "printAreaDraw", start: clone(project), x: event.clientX, y: event.clientY, point: position }; mutate((current) => { current.printArea = { x: position.x, y: position.y, width: 12, height: 12 }; return current; }, false); event.currentTarget.setPointerCapture(event.pointerId); return; }
+    if (tool === "feature") {
+      const draft = featureDraftRef.current;
+      if (!draft || !event.isPrimary) return;
+      event.preventDefault();
+      if (draft.mode === "freehand") {
+        const next = { ...draft, points: [featurePointAt(position)] };
+        replaceFeatureDraft(next);
+        drag.current = { kind: "featureFreehand", start: clone(project), x: event.clientX, y: event.clientY };
+        event.currentTarget.setPointerCapture(event.pointerId);
+        return;
+      }
+      const first = draft.points[0];
+      if (first && draft.points.length >= 3 && Math.hypot(first.x - position.x, first.y - position.y) * zoom <= 16) {
+        commitFeatureDraft(draft, true);
+        return;
+      }
+      const previous = draft.points.at(-1);
+      if (previous && Math.hypot(previous.x - position.x, previous.y - position.y) * zoom < 2) return;
+      const next = { ...draft, points: [...draft.points, featurePointAt(position)] };
+      replaceFeatureDraft(next);
+      setFeatureDraftPointer(null);
+      return;
+    }
     if (tool === "coast" && project.shoreLocked) { setTool("select"); setNotice("The shoreline is locked. Unlock it to draw or adjust the coast."); return; }
     if (tool === "coast") { mutate((current) => { current.coastline.push({ id: id(), ...position }); return current; }); setNotice("Shoreline vertex added. Keep clicking to trace the coast."); return; }
     if (tool === "route") {
@@ -840,10 +1027,22 @@ export default function ScubaMapMaker() {
   const onStagePointerMove = (event: PointerEvent<HTMLDivElement>) => {
     if (!project) return;
     if (tool === "route" && routeDraft) setRouteDraftPointer(snapRoutePoint(project, canvasPosition(event)));
+    if (tool === "feature" && featureDraft?.mode !== "freehand" && featureDraft?.points.length) setFeatureDraftPointer(featurePointAt(canvasPosition(event)));
     if (!drag.current) return;
     const activeDrag = drag.current;
     if (activeDrag.kind === "pan") return;
     if (activeDrag.kind === "reference") { const dx = (event.clientX - activeDrag.x) / zoom; const dy = (event.clientY - activeDrag.y) / zoom; mutate((current) => { current.reference.x += dx; current.reference.y += dy; return current; }, false); activeDrag.x = event.clientX; activeDrag.y = event.clientY; return; }
+    if (activeDrag.kind === "featureFreehand") {
+      const draft = featureDraftRef.current;
+      if (!draft || draft.mode !== "freehand") return;
+      const position = canvasPosition(event);
+      const previous = draft.points.at(-1);
+      if (previous && Math.hypot(previous.x - position.x, previous.y - position.y) * zoom < 2) return;
+      if (draft.points.length >= 2000) return;
+      activeDrag.changed = true;
+      replaceFeatureDraft({ ...draft, points: [...draft.points, featurePointAt(position)] });
+      return;
+    }
     if (activeDrag.kind === "annotation" && activeDrag.id && activeDrag.annotationKind && activeDrag.offset) {
       const movedPixels = Math.hypot(event.clientX - (activeDrag.originX ?? activeDrag.x), event.clientY - (activeDrag.originY ?? activeDrag.y));
       if (!activeDrag.moved && movedPixels < 3) return;
@@ -883,6 +1082,33 @@ export default function ScubaMapMaker() {
       if (next) mutate((current) => { current.printArea = next; return current; }, false);
       return;
     }
+    if (activeDrag.kind === "feature" && activeDrag.id) {
+      const dx = (event.clientX - activeDrag.x) / zoom;
+      const dy = (event.clientY - activeDrag.y) / zoom;
+      if (Math.hypot(dx, dy) <= 1e-6) return;
+      activeDrag.changed = true;
+      mutate((current) => {
+        const featureIndex = current.geographicFeatures.findIndex((feature) => feature.id === activeDrag.id);
+        if (featureIndex >= 0) current.geographicFeatures[featureIndex] = translateGeographicFeature(current.geographicFeatures[featureIndex], dx, dy);
+        return current;
+      }, false);
+      activeDrag.x = event.clientX;
+      activeDrag.y = event.clientY;
+      return;
+    }
+    if (activeDrag.kind === "featureAnchor" && activeDrag.id && activeDrag.pointId) {
+      const feature = project.geographicFeatures.find((candidate) => candidate.id === activeDrag.id);
+      const anchor = feature?.points.find((point) => point.id === activeDrag.pointId);
+      if (!anchor || Math.hypot(anchor.x - position.x, anchor.y - position.y) <= 1e-6) return;
+      activeDrag.changed = true;
+      mutate((current) => {
+        const currentFeature = current.geographicFeatures.find((candidate) => candidate.id === activeDrag.id);
+        const currentAnchor = currentFeature?.points.find((point) => point.id === activeDrag.pointId);
+        if (currentAnchor) { currentAnchor.x = position.x; currentAnchor.y = position.y; }
+        return current;
+      }, false);
+      return;
+    }
     if (activeDrag.kind === "waypoint" && activeDrag.id) {
       const point = project.waypoints.find((item) => item.id === activeDrag.id);
       if (point && Math.hypot(point.x - position.x, point.y - position.y) > 1e-6) { activeDrag.changed = true; mutate((current) => movePoint(current, activeDrag.id!, position.x, position.y), false); }
@@ -893,9 +1119,26 @@ export default function ScubaMapMaker() {
     }
     if (activeDrag.kind === "coast" && activeDrag.id) mutate((current) => { const vertex = current.coastline.find((item) => item.id === activeDrag.id); if (vertex) Object.assign(vertex, position); return current; }, false);
   };
-  const onStagePointerUp = () => {
+  const onStagePointerUp = (event: PointerEvent<HTMLDivElement>) => {
     if (!drag.current || !project) return;
     const activeDrag = drag.current;
+    if (activeDrag.kind === "featureFreehand") {
+      drag.current = null;
+      const draft = featureDraftRef.current;
+      if (event.type === "pointercancel") {
+        replaceFeatureDraft(null);
+        setFeatureDraftPointer(null);
+        setTool("select");
+        setNotice("Freehand gesture canceled. No feature was saved.");
+        return;
+      }
+      if (!draft) return;
+      const first = draft.points[0];
+      const last = draft.points.at(-1);
+      const closed = draft.closed || Boolean(first && last && draft.points.length >= 3 && Math.hypot(first.x - last.x, first.y - last.y) * zoom <= 16);
+      commitFeatureDraft(draft, closed);
+      return;
+    }
     const original = activeDrag.start; const kind = activeDrag.kind; let changed = activeDrag.changed; drag.current = null;
     if (kind === "annotation" && changed && activeDrag.id && activeDrag.annotationKind && activeDrag.initialOffset) {
       const finalOffset = activeDrag.offset;
@@ -914,11 +1157,13 @@ export default function ScubaMapMaker() {
       }
     }
     if (kind === "annotation" && !changed) return;
-    if ((kind === "waypoint" || kind === "routeVertex") && !changed) return;
+    if ((kind === "waypoint" || kind === "routeVertex" || kind === "feature" || kind === "featureAnchor") && !changed) return;
     if (kind === "waypoint" || kind === "routeVertex") mutate((current) => reconcileRouteTopology(current), false);
     if (kind !== "pan") { setUndoStack((items) => [...items.slice(-29), original]); setRedoStack([]); }
     if (kind === "printAreaDraw") { setTool("select"); setNotice("Print area set. Drag its center or corners to refine it, then print the selected area."); }
     if (kind === "annotation") setNotice("Label position saved. Use the point inspector to reset it.");
+    if (kind === "feature") setNotice("Map feature moved.");
+    if (kind === "featureAnchor") setNotice("Feature anchor moved.");
   };
   const onStageWheel = (event: WheelEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -935,8 +1180,44 @@ export default function ScubaMapMaker() {
     setPan(nextPan);
   };
   const startDrag = (event: PointerEvent<HTMLButtonElement>, kind: "waypoint" | "routeVertex" | "coast", itemId: string) => {
-    event.stopPropagation(); if (!project || (kind === "coast" && project.shoreLocked)) return; event.currentTarget.setPointerCapture(event.pointerId); drag.current = { kind, id: itemId, start: clone(project), x: event.clientX, y: event.clientY }; setSelectedId(kind === "waypoint" ? itemId : null); setSelectedVectorId(null); if (kind !== "routeVertex") { setSelectedRouteId(null); setActivePanel(null); } setTool("select");
+    event.stopPropagation(); if (!project || (kind === "coast" && project.shoreLocked)) return; event.currentTarget.setPointerCapture(event.pointerId); drag.current = { kind, id: itemId, start: clone(project), x: event.clientX, y: event.clientY }; setSelectedId(kind === "waypoint" ? itemId : null); setSelectedFeatureId(null); setSelectedVectorId(null); if (kind !== "routeVertex") { setSelectedRouteId(null); setActivePanel(null); } setTool("select");
     setSelectedRouteVertexId(kind === "routeVertex" ? itemId : null);
+  };
+  const startFeatureDrag = (event: PointerEvent<SVGPathElement>, featureId: string) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!project || tool !== "select" || event.button !== 0 || !event.isPrimary) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    drag.current = { kind: "feature", id: featureId, start: clone(project), x: event.clientX, y: event.clientY };
+    selectGeographicFeature(featureId);
+  };
+  const startFeatureAnchorDrag = (event: PointerEvent<HTMLButtonElement>, featureId: string, pointId: string) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!project || event.button !== 0 || !event.isPrimary) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    drag.current = { kind: "featureAnchor", id: featureId, pointId, start: clone(project), x: event.clientX, y: event.clientY };
+    selectGeographicFeature(featureId, false);
+  };
+  const nudgeFeatureAnchor = (event: ReactKeyboardEvent<HTMLButtonElement>, featureId: string, pointId: string) => {
+    const direction: Record<string, { x: number; y: number }> = {
+      ArrowUp: { x: 0, y: -1 }, ArrowDown: { x: 0, y: 1 }, ArrowLeft: { x: -1, y: 0 }, ArrowRight: { x: 1, y: 0 },
+    };
+    const delta = direction[event.key];
+    if (!delta) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const step = (event.shiftKey ? 10 : 1) / zoom;
+    mutate((current) => {
+      const feature = current.geographicFeatures.find((candidate) => candidate.id === featureId);
+      const point = feature?.points.find((candidate) => candidate.id === pointId);
+      if (point) {
+        point.x = Math.max(0, Math.min(CANVAS.width, point.x + delta.x * step));
+        point.y = Math.max(0, Math.min(CANVAS.height, point.y + delta.y * step));
+      }
+      return current;
+    });
+    setNotice("Feature anchor nudged.");
   };
   const startAnnotationDrag = (event: PointerEvent<HTMLButtonElement>, point: Point, annotationKind: PointAnnotationKind) => {
     event.preventDefault(); event.stopPropagation();
@@ -945,7 +1226,7 @@ export default function ScubaMapMaker() {
     event.currentTarget.focus({ preventScroll: true });
     event.currentTarget.setPointerCapture(event.pointerId);
     drag.current = { kind: "annotation", id: point.id, annotationKind, offset, initialOffset: { ...offset }, hadOffset: Boolean(point.labelOffsets?.[annotationKind]), moved: false, changed: false, originX: event.clientX, originY: event.clientY, start: clone(project), x: event.clientX, y: event.clientY };
-    setSelectedId(point.id); setSelectedVectorId(null); setSelectedRouteId(null); setActivePanel(null); setTool("select");
+    setSelectedId(point.id); setSelectedVectorId(null); setSelectedRouteId(null); setSelectedFeatureId(null); setActivePanel(null); setTool("select");
   };
   const onAnnotationKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>, point: Point, annotationKind: PointAnnotationKind) => {
     const direction: Record<string, { x: number; y: number }> = {
@@ -959,7 +1240,7 @@ export default function ScubaMapMaker() {
     const nextOffset = { dx: offset.dx + delta.x * step, dy: offset.dy + delta.y * step };
     if (nextOffset.dx === offset.dx && nextOffset.dy === offset.dy) return;
     mutate((current) => { const item = current.waypoints.find((candidate) => candidate.id === point.id); if (item) assignAnnotationOffset(item, annotationKind, nextOffset); return current; });
-    setSelectedId(point.id); setSelectedVectorId(null); setSelectedRouteId(null); setActivePanel(null); setTool("select");
+    setSelectedId(point.id); setSelectedVectorId(null); setSelectedRouteId(null); setSelectedFeatureId(null); setActivePanel(null); setTool("select");
   };
   const startPrintAreaAdjust = (event: PointerEvent<HTMLButtonElement>, handle: PrintAreaHandle) => {
     event.preventDefault(); event.stopPropagation();
@@ -975,10 +1256,29 @@ export default function ScubaMapMaker() {
     setTool("select");
     setNotice(willLock ? "Shoreline locked. Drawing tools are minimized." : "Shoreline unlocked. You can draw or adjust the coast again.");
   };
+  const updateGeographicFeature = (featureId: string, transform: (feature: GeographicFeature) => GeographicFeature, record = false) => {
+    mutate((current) => {
+      const featureIndex = current.geographicFeatures.findIndex((feature) => feature.id === featureId);
+      if (featureIndex >= 0) current.geographicFeatures[featureIndex] = transform(current.geographicFeatures[featureIndex]);
+      return current;
+    }, record);
+  };
+  const deleteGeographicFeature = (featureId: string) => {
+    const feature = project?.geographicFeatures.find((candidate) => candidate.id === featureId);
+    if (!feature || !window.confirm(`Delete “${feature.name.trim() || "Untitled feature"}” from this map?`)) return;
+    mutate((current) => {
+      current.geographicFeatures = current.geographicFeatures.filter((candidate) => candidate.id !== featureId);
+      return current;
+    });
+    setSelectedFeatureId(null);
+    setNotice("Map feature deleted.");
+  };
+  const redrawFreehandFeature = (featureId: string) => beginFeatureDrawing("freehand", featureId);
   const selectVector = (vector: Vector) => {
     setSelectedVectorId(vector.id);
     setSelectedId(null);
     setSelectedRouteVertexId(null);
+    setSelectedFeatureId(null);
     const route = routeForVector(routes, vector.id);
     setSelectedRouteId(route?.id ?? null);
     setSurveyTab("routes");
@@ -998,12 +1298,16 @@ export default function ScubaMapMaker() {
     }
     setRouteDraft({ points, name: extension?.route.name ?? "", extendRouteId: extension?.route.id, extendAt: extension?.at });
     setRouteDraftPointer(null);
+    replaceFeatureDraft(null);
+    setFeatureDraftPointer(null);
+    setFeatureModePickerOpen(false);
     setTool("route");
     setActivePanel(null);
     setSelectedId(null);
     setSelectedRouteId(extension?.route.id ?? null);
     setSelectedVectorId(null);
     setSelectedRouteVertexId(null);
+    setSelectedFeatureId(null);
     setNotice(extension ? `Drawing from the ${extension.at} of ${routeDisplayName(extension.route)}. Click vertices, then Finish.` : "Draw a route: click each vertex, then Finish. Every crossing becomes a junction.");
   };
   const cancelRouteDrawing = () => {
@@ -1190,9 +1494,9 @@ export default function ScubaMapMaker() {
   const changeDistanceUnit = (unit: Unit) => mutate((current) => { current.distanceUnit = unit; return synchronizeVectors(current); }, false);
   const setExportSetting = (setting: ExportToggleKey, value: boolean) => mutate((current) => { current.exportSettings = { ...DEFAULT_EXPORT_SETTINGS, ...current.exportSettings, [setting]: value }; return current; }, false);
   const setNamePlacement = (namePlacement: NamePlacement) => mutate((current) => { current.exportSettings = { ...DEFAULT_EXPORT_SETTINGS, ...current.exportSettings, namePlacement }; return current; }, false);
-  const newProject = () => { const next = emptyProject("New dive site"); setProject(next); setProjects((items) => [next, ...items]); setSelectedId(null); setSelectedVectorId(null); setSelectedRouteId(null); setSelectedRouteVertexId(null); setRouteDraft(null); setUndoStack([]); setRedoStack([]); void persistProject(next); setNotice("New project created locally."); };
+  const newProject = () => { const next = emptyProject("New dive site"); setProject(next); setProjects((items) => [next, ...items]); setSelectedId(null); setSelectedVectorId(null); setSelectedRouteId(null); setSelectedRouteVertexId(null); setSelectedFeatureId(null); setRouteDraft(null); replaceFeatureDraft(null); setFeatureDraftPointer(null); setFeatureModePickerOpen(false); setUndoStack([]); setRedoStack([]); void persistProject(next); setNotice("New project created locally."); };
   const duplicateProject = () => { if (!project) return; const next = clone(project); next.id = id(); next.title = `${project.title} copy`; setProject(next); setProjects((items) => [next, ...items]); void persistProject(next); setNotice("Project duplicated locally."); };
-  const deleteProject = () => { if (!project || !window.confirm(`Delete “${project.title}” from this browser?`)) return; void removeProjectFromStore(project.id); const remaining = projects.filter((item) => item.id !== project.id); const next = remaining[0] ?? emptyProject("New dive site"); setProjects(remaining.length ? remaining : [next]); setProject(next); setSelectedId(null); setSelectedVectorId(null); setSelectedRouteId(null); setSelectedRouteVertexId(null); setRouteDraft(null); if (!remaining.length) void persistProject(next); setNotice("Local project deleted."); };
+  const deleteProject = () => { if (!project || !window.confirm(`Delete “${project.title}” from this browser?`)) return; void removeProjectFromStore(project.id); const remaining = projects.filter((item) => item.id !== project.id); const next = remaining[0] ?? emptyProject("New dive site"); setProjects(remaining.length ? remaining : [next]); setProject(next); setSelectedId(null); setSelectedVectorId(null); setSelectedRouteId(null); setSelectedRouteVertexId(null); setSelectedFeatureId(null); setRouteDraft(null); replaceFeatureDraft(null); setFeatureDraftPointer(null); setFeatureModePickerOpen(false); if (!remaining.length) void persistProject(next); setNotice("Local project deleted."); };
   const exportBackup = () => { if (!project) return; const blob = new Blob([JSON.stringify(project, null, 2)], { type: "application/json" }); const link = document.createElement("a"); link.href = URL.createObjectURL(blob); link.download = `${project.title.replace(/[^a-z0-9]+/gi, "-").toLowerCase() || "dive-map"}.json`; link.click(); URL.revokeObjectURL(link.href); setNotice("Editable project backup downloaded."); };
   const importBackup = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]; if (!file) return; const reader = new FileReader(); reader.onload = () => { try { const raw = JSON.parse(String(reader.result)) as StoredProject; if ((raw.version !== 1 && raw.version !== 2) || !Array.isArray(raw.waypoints)) throw new Error("Unsupported backup"); const imported = normalizeProject(raw); imported.id = id(); imported.title = `${imported.title || "Imported dive site"} (imported)`; setProject(imported); setProjects((items) => [imported, ...items]); void persistProject(imported); setNotice(`Project v${raw.version} backup imported and normalized to v2.`); } catch { setNotice("That file is not a compatible dive-map backup."); } }; reader.readAsText(file); event.target.value = "";
@@ -1395,6 +1699,11 @@ export default function ScubaMapMaker() {
     const print = routeLabelAnchor(route, nodes, project.vectors, printArea);
     return screen ? [{ route, screen, print }] : [];
   });
+  const geographicFeatureLabels = project.geographicFeatures.flatMap((feature) => {
+    const name = feature.name.trim();
+    const anchor = name ? geographicFeatureLabelAnchor(feature) : undefined;
+    return anchor ? [{ feature, name, anchor }] : [];
+  });
   const routeEditor = (openDrawerForSegment: boolean) => <div className="route-editor">
     <div className="survey-route-list" aria-label="Routes">
       {routes.map((route, index) => {
@@ -1438,11 +1747,41 @@ export default function ScubaMapMaker() {
   const routeHitHeight = 44 / zoom;
   const routeControlStyle = { "--route-hit-height": `${routeHitHeight}px`, "--route-hit-offset": `${-routeHitHeight / 2}px`, "--route-label-border": `${1 / zoom}px`, "--route-label-radius": `${3 / zoom}px`, "--route-label-font": `${11 / zoom}px`, "--route-label-padding-y": `${2 / zoom}px`, "--route-label-padding-x": `${4 / zoom}px`, "--route-name-font": `${12 / zoom}px`, "--route-name-width": `${154 / zoom}px`, "--route-name-padding-y": `${4 / zoom}px`, "--route-name-padding-x": `${7 / zoom}px` } as CSSProperties;
   const routeNameLabelStyle = (anchor: RouteLabelAnchor) => ({ ...routeControlStyle, left: anchor.x, top: anchor.y, "--route-name-angle": `${anchor.angleRadians}rad` }) as CSSProperties;
+  const featureDashArray = (dash: GeographicFeatureDash, width: number, scale: number) => dash === "solid" ? "none" : dash === "dashed" ? `${7 * width / scale}px ${5 * width / scale}px` : `${width / scale}px ${4 * width / scale}px`;
+  const featurePathStyle = (feature: GeographicFeature) => ({
+    "--feature-color": feature.style.color,
+    "--feature-stroke-width": `${feature.style.width / zoom}px`,
+    "--feature-dash-array": featureDashArray(feature.style.dash, feature.style.width, zoom),
+    "--print-feature-stroke-width": `${feature.style.width / effectivePrintScale}px`,
+    "--print-feature-dash-array": featureDashArray(feature.style.dash, feature.style.width, effectivePrintScale),
+  }) as CSSProperties;
+  const featureLayerStyle = { "--feature-hit-width": `${44 / zoom}px`, "--feature-selected-width": `${6 / zoom}px` } as CSSProperties;
+  const featureAnchorStyle = (feature: GeographicFeature) => ({ "--feature-color": feature.style.color, "--feature-anchor-hit-size": `${44 / zoom}px`, "--feature-anchor-size": `${10 / zoom}px`, "--feature-anchor-border": `${2 / zoom}px`, "--feature-anchor-halo": `${3 / zoom}px` }) as CSSProperties;
+  const featureNameLabelStyle = (anchor: NonNullable<ReturnType<typeof geographicFeatureLabelAnchor>>) => ({
+    left: anchor.x,
+    top: anchor.y,
+    "--feature-name-angle": `${anchor.angleRadians}rad`,
+    "--feature-name-width": `${154 / zoom}px`,
+    "--feature-name-hit-height": `${44 / zoom}px`,
+    "--feature-name-font": `${11 / zoom}px`,
+    "--feature-name-offset": `${6 / zoom}px`,
+    "--feature-name-padding-y": `${3 / zoom}px`,
+    "--feature-name-padding-x": `${6 / zoom}px`,
+    "--feature-name-border": `${1 / zoom}px`,
+    "--feature-name-radius": `${3 / zoom}px`,
+    "--print-feature-name-width": `${150 / effectivePrintScale}px`,
+    "--print-feature-name-offset": `${4 / effectivePrintScale}px`,
+  }) as CSSProperties;
   const routeNetworkStyle = { "--route-width": `${2 / zoom}px`, "--route-selected-width": `${3 / zoom}px`, "--route-selected-path-width": `${5 / zoom}px`, "--route-chevron-width": `${2 / zoom}px`, "--route-branch-radius": `${1 / zoom}px`, "--route-symbol-cutout-radius": `${30 * pointSymbolScale / zoom}px`, "--print-route-width": `${2 / effectivePrintScale}px`, "--print-route-branch-radius": `${1 / effectivePrintScale}px`, "--print-route-symbol-cutout-radius": `${20 * pointSymbolScale / effectivePrintScale}px` } as CSSProperties;
   const selectedDirectionPath = selectedRouteLine ? directionChevronPath(selectedRouteLine, zoom) : "";
   const routeDraftPath = routeDraft && routeDraft.points.length > 1 ? routeDraft.points.map((point, index) => `${index ? "L" : "M"}${point.x} ${point.y}`).join(" ") : "";
   const routeDraftPreviewPath = routeDraft?.points.length && routeDraftPointer ? `M${routeDraft.points[routeDraft.points.length - 1].x} ${routeDraft.points[routeDraft.points.length - 1].y} L${routeDraftPointer.x} ${routeDraftPointer.y}` : "";
   const routeDraftStyle = { "--route-draft-node-radius": `${5 / zoom}px` } as CSSProperties;
+  const featureDraftPath = featureDraft ? geographicFeaturePath(featureDraft) : "";
+  const featureDraftPreviewPath = featureDraft && featureDraft.mode !== "freehand" && featureDraft.points.length && featureDraftPointer
+    ? `M${featureDraft.points.at(-1)!.x} ${featureDraft.points.at(-1)!.y} L${featureDraftPointer.x} ${featureDraftPointer.y}`
+    : "";
+  const featureDraftStyle = { "--feature-draft-width": `${3 / zoom}px`, "--feature-preview-dash-array": `${7 / zoom}px ${6 / zoom}px` } as CSSProperties;
   const routeVertexDisplayStyle = { "--route-vertex-hit-size": `${44 / zoom}px`, "--route-vertex-size": `${10 / zoom}px`, "--route-vertex-border": `${2 / zoom}px`, "--route-vertex-halo": `${3 / zoom}px` } as CSSProperties;
   const waypointDisplayStyle = { "--point-hit-size": `${44 / zoom}px`, "--point-dot-size": `${14 / zoom}px`, "--point-dot-border": `${2 / zoom}px`, "--point-ring": `${1 / zoom}px`, "--point-origin-ring": `${2 / zoom}px`, "--point-selected-ring": `${3 / zoom}px`, "--point-shadow": `${1 / zoom}px`, "--point-shadow-blur": `${4 / zoom}px`, "--point-symbol-size": `${38 * pointSymbolScale / zoom}px`, "--junction-size": `${10 / zoom}px`, "--junction-border": `${2 / zoom}px`, "--junction-halo": `${4 / zoom}px` } as CSSProperties;
   const toolDockStyle = dockPosition ? { "--tool-dock-left": `${dockPosition.left}px`, "--tool-dock-top": `${dockPosition.top}px` } as CSSProperties : undefined;
@@ -1486,7 +1825,7 @@ export default function ScubaMapMaker() {
   const selectProject = (projectId: string) => {
     const next = projects.find((item) => item.id === projectId);
     if (!next) return;
-    setProject(next); setSelectedId(null); setSelectedVectorId(null); setSelectedRouteId(null); setSelectedRouteVertexId(null); setRouteDraft(null); setUndoStack([]); setRedoStack([]); setActivePanel(null);
+    setProject(next); setSelectedId(null); setSelectedVectorId(null); setSelectedRouteId(null); setSelectedRouteVertexId(null); setSelectedFeatureId(null); setRouteDraft(null); replaceFeatureDraft(null); setFeatureDraftPointer(null); setFeatureModePickerOpen(false); setUndoStack([]); setRedoStack([]); setActivePanel(null);
   };
   const pointInspector = selected ? <section className="survey-point-inspector" aria-label={`Point details for ${selected.label}`}>
     <div className="survey-section-heading"><div><span>Selected point</span><h3>{selected.label}{selected.name?.trim() ? ` · ${selected.name.trim()}` : ""}</h3></div><button className="close-button" aria-label={`Close ${selected.label} details`} onClick={() => setSelectedId(null)}><SoundingsIcon name="close"/></button></div>
@@ -1501,6 +1840,18 @@ export default function ScubaMapMaker() {
     {selectedOffsetKinds.length > 0 && <section className="annotation-reset-section" aria-label="Label positions"><div className="annotation-reset-heading"><span>Label positions</span>{selectedOffsetKinds.length > 1 && <button type="button" aria-label={`Reset all label positions for ${selected.label}`} onClick={() => resetAnnotationOffsets(selected.id)}>Reset all</button>}</div><div className="annotation-reset-list">{selectedOffsetKinds.map((annotationKind) => <div key={annotationKind}><span>{POINT_ANNOTATION_LABELS[annotationKind]}</span><button type="button" aria-label={`Reset ${POINT_ANNOTATION_LABELS[annotationKind]} position for ${selected.label}`} onClick={() => resetAnnotationOffsets(selected.id, annotationKind)}>Reset</button></div>)}</div></section>}
     {selectedConnection && <dl className="route-summary"><div><dt>From</dt><dd>{nodeLabel(selectedConnectionStart, selected.label)}</dd></div><div><dt>Bearing</dt><dd>{Math.round(selectedConnection.bearing).toString().padStart(3, "0")}°</dd></div><div><dt>Distance</dt><dd>{formatNumber(selectedConnection.distance)} {selectedConnection.unit}</dd></div></dl>}
     <div className="survey-point-actions"><button className="secondary-button" onClick={() => beginRouteDrawing(undefined, selected)}><SoundingsIcon name="route"/>Draw route from {selected.label}</button><button className="danger-button" onClick={deleteSelected}><SoundingsIcon name="trash"/>Delete point</button></div>
+  </section> : null;
+  const featureInspector = selectedFeature ? <section className="feature-inspector" aria-label={`Feature details for ${selectedFeature.name.trim() || "Untitled feature"}`}>
+    <h3>{selectedFeature.name.trim() || "Untitled feature"}</h3>
+    <label>Feature name<input value={selectedFeature.name} placeholder="Optional map label" onChange={(event) => updateGeographicFeature(selectedFeature.id, (feature) => ({ ...feature, name: event.target.value }))} onBlur={() => setNotice(selectedFeature.name.trim() ? "Feature name and label saved." : "Feature name cleared.")}/></label>
+    <div className="feature-style-grid">
+      <label className="feature-color-field"><span>Line color<output>{selectedFeature.style.color.toUpperCase()}</output></span><input type="color" aria-label="Line color" value={selectedFeature.style.color} onChange={(event) => updateGeographicFeature(selectedFeature.id, (feature) => ({ ...feature, style: { ...feature.style, color: event.target.value } }))}/></label>
+      <label>Line width<span className="range-label"><span>Weight</span><output>{formatNumber(selectedFeature.style.width)} px</output></span><input type="range" aria-label="Line width" min="1" max="8" step="0.5" value={selectedFeature.style.width} onChange={(event) => updateGeographicFeature(selectedFeature.id, (feature) => ({ ...feature, style: { ...feature.style, width: Number(event.target.value) } }))}/></label>
+    </div>
+    <fieldset className="point-symbol-picker"><legend>Line style</legend><div className="feature-dash-options">{(Object.entries(GEOGRAPHIC_FEATURE_DASH_LABELS) as Array<[GeographicFeatureDash, string]>).map(([dash, label]) => <label className={selectedFeature.style.dash === dash ? "active" : ""} key={dash}><input type="radio" name={`feature-dash-${selectedFeature.id}`} value={dash} checked={selectedFeature.style.dash === dash} onChange={() => updateGeographicFeature(selectedFeature.id, (feature) => ({ ...feature, style: { ...feature.style, dash } }), true)}/>{label}</label>)}</div></fieldset>
+    <label className="feature-closed-field">Closed loop<input className="switch" type="checkbox" checked={selectedFeature.closed} disabled={selectedFeature.points.length < 3} onChange={(event) => updateGeographicFeature(selectedFeature.id, (feature) => ({ ...feature, closed: event.target.checked && feature.points.length >= 3 }), true)}/></label>
+    <p className="drawer-copy">{selectedFeature.mode === "freehand" ? "Drag the selected stroke to move it, or redraw its geometry." : "Drag the line to move it. Drag its anchors for precise editing."}</p>
+    <div className="feature-editor-actions">{selectedFeature.mode === "freehand" && <button onClick={() => redrawFreehandFeature(selectedFeature.id)}>Redraw freehand</button>}<button className="danger-button" onClick={() => deleteGeographicFeature(selectedFeature.id)}>Delete feature</button></div>
   </section> : null;
 
   return (
@@ -1521,7 +1872,7 @@ export default function ScubaMapMaker() {
           <div className="top-actions"><button onClick={undo} disabled={!undoStack.length}><SoundingsIcon name="undo"/>Undo</button><button onClick={redo} disabled={!redoStack.length}><SoundingsIcon name="redo"/>Redo</button><button className="export-button" onClick={() => setActivePanel("export")}><SoundingsIcon name="export"/>Export</button></div>
         </header>
 
-        <div className={`map-stage ${tool === "select" ? "pan-ready" : ""}${tool === "route" ? " route-draw-active" : ""}${printArea ? " has-print-area" : ""}${smartCalloutsActive ? " smart-callout-mode" : ""}${smartCalloutOverflowIds.length ? " smart-callout-overflow" : ""}`} style={printStageStyle} ref={stageRef} tabIndex={0} aria-label="Map navigation surface. Drag blank map space to pan; scroll to zoom; use arrow keys to move around." onPointerDown={onStagePointerDown} onPointerMove={onStagePointerMove} onPointerUp={onStagePointerUp} onPointerCancel={onStagePointerUp} onWheel={onStageWheel}>
+        <div className={`map-stage ${tool === "select" ? "pan-ready" : ""}${tool === "route" ? " route-draw-active" : ""}${tool === "feature" ? " feature-draw-active" : ""}${printArea ? " has-print-area" : ""}${smartCalloutsActive ? " smart-callout-mode" : ""}${smartCalloutOverflowIds.length ? " smart-callout-overflow" : ""}`} style={printStageStyle} ref={stageRef} tabIndex={0} aria-label="Map navigation surface. Drag blank map space to pan; scroll to zoom; use arrow keys to move around." onPointerDown={onStagePointerDown} onPointerMove={onStagePointerMove} onPointerUp={onStagePointerUp} onPointerCancel={onStagePointerUp} onWheel={onStageWheel}>
           <div className="print-map-viewport">
             <div className="map-canvas" style={{ ...printMapDisplayStyle, transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}>
             <div className="water-label">BEAVER LAKE · DIVE SITE CHART</div>
@@ -1533,6 +1884,27 @@ export default function ScubaMapMaker() {
             </>}
             {shorelinePath && <svg className={`shoreline-path${visibleLayers.shoreline ? "" : " screen-hidden"}${exportClass(exportSettings.shoreline)}`} style={shoreStrokeStyle} viewBox={`0 0 ${CANVAS.width} ${CANVAS.height}`} aria-hidden="true"><path className="shoreline-base" d={shorelinePath}/><path className="shoreline-edge" d={shorelinePath}/></svg>}
             {!project.shoreLocked && visibleLayers.shoreline && coast.map((vertex) => <button key={vertex.id} aria-label="Move shoreline vertex" className="coast-vertex" style={{ left: vertex.x, top: vertex.y }} onPointerDown={(event) => startDrag(event, "coast", vertex.id)} />)}
+            {project.geographicFeatures.length > 0 && <svg className={`feature-layer${visibleLayers.geographicFeatures ? "" : " screen-hidden"}${exportClass(exportSettings.geographicFeatures)}`} style={featureLayerStyle} viewBox={`0 0 ${CANVAS.width} ${CANVAS.height}`} aria-label="Geographic map features">
+              {project.geographicFeatures.map((feature, index) => {
+                const path = geographicFeaturePath(feature);
+                if (!path) return null;
+                const label = feature.name.trim() || `Untitled feature ${index + 1}`;
+                return <g key={feature.id} style={featurePathStyle(feature)}>
+                  <path className="feature-path" data-feature-id={feature.id} d={path}/>
+                  {selectedFeatureId === feature.id && <path className="feature-selected-path print-hidden" d={path}/>}
+                  {tool === "select" && <path
+                    className="feature-hit-path print-hidden"
+                    d={path}
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Select and move ${label}`}
+                    onPointerDown={(event) => startFeatureDrag(event, feature.id)}
+                    onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); selectGeographicFeature(feature.id); } }}
+                  />}
+                </g>;
+              })}
+            </svg>}
+            {selectedFeature && selectedFeature.mode !== "freehand" && visibleLayers.geographicFeatures && selectedFeature.points.map((point, index) => <button className="feature-anchor-handle print-hidden" style={{ ...featureAnchorStyle(selectedFeature), left: point.x, top: point.y }} key={point.id} aria-label={`Move anchor ${index + 1} for ${selectedFeature.name.trim() || "Untitled feature"}. Use arrow keys for fine positioning.`} onPointerDown={(event) => startFeatureAnchorDrag(event, selectedFeature.id, point.id)} onKeyDown={(event) => nudgeFeatureAnchor(event, selectedFeature.id, point.id)}/>) }
             {visualRouteNetwork.paths.length > 0 && <svg className={`route-network${visibleLayers.routes ? "" : " screen-hidden"}${exportClass(exportSettings.routes)}`} style={routeNetworkStyle} viewBox={`0 0 ${CANVAS.width} ${CANVAS.height}`} shapeRendering="geometricPrecision" aria-hidden="true">
               <defs>
                 <mask id="route-symbol-clearance-mask" className="route-symbol-mask" maskUnits="userSpaceOnUse" maskContentUnits="userSpaceOnUse" x="0" y="0" width={CANVAS.width} height={CANVAS.height}>
@@ -1556,6 +1928,11 @@ export default function ScubaMapMaker() {
               {routeDraftPath && <path className="route-draft-path" d={routeDraftPath}/>}
               {routeDraftPreviewPath && <path className="route-draft-preview" d={routeDraftPreviewPath}/>}
               {routeDraft.points.map((point, index) => <circle className="route-draft-node" key={`${point.nodeId ?? "draft"}-${index}`} cx={point.x} cy={point.y}/>)}
+            </svg>}
+            {featureDraft && <svg className="feature-draft-layer print-hidden" style={featureDraftStyle} viewBox={`0 0 ${CANVAS.width} ${CANVAS.height}`} aria-hidden="true">
+              {featureDraftPath && <path className="feature-draft-path" d={featureDraftPath}/>}
+              {featureDraftPreviewPath && <path className="feature-draft-preview" d={featureDraftPreviewPath}/>}
+              {featureDraft.mode !== "freehand" && featureDraft.points.map((point) => <circle className="feature-draft-anchor" key={point.id} cx={point.x} cy={point.y} r={5 / zoom}/>) }
             </svg>}
             {project.vectors.map((vector) => {
               const line = geometry(project, vector); if (!line) return null;
@@ -1582,6 +1959,10 @@ export default function ScubaMapMaker() {
                 onClick={(event) => { event.stopPropagation(); focusRoute(route); }}
               ><span>{route.name}</span></button>
               {print && <span className={`route-name-label route-name-label-print screen-hidden${exportClass(exportSettings.routeNameLabels)}`} style={routeNameLabelStyle(print)} aria-label={`Route ${route.name}`}><span>{route.name}</span></span>}
+            </Fragment>)}
+            {geographicFeatureLabels.map(({ feature, name, anchor }) => <Fragment key={`feature-name-${feature.id}`}>
+              <button className={`feature-name-label print-hidden${visibleLayers.geographicFeatureLabels ? "" : " screen-hidden"}`} style={featureNameLabelStyle(anchor)} aria-label={`Map feature ${name}`} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); selectGeographicFeature(feature.id); }}><span>{name}</span></button>
+              {pointInPrintArea(anchor, printArea) && <span className={`feature-name-label feature-name-label-print screen-hidden${exportClass(exportSettings.geographicFeatureLabels)}`} style={featureNameLabelStyle(anchor)} aria-label={`Map feature ${name}`}><span>{name}</span></span>}
             </Fragment>)}
             {depthPoints.length >= 3 && <div className={`contours${visibleLayers.contours ? "" : " screen-hidden"}${exportClass(exportSettings.contours)}`} style={{ left: depthPoints.reduce((sum, point) => sum + point.x, 0) / depthPoints.length, top: depthPoints.reduce((sum, point) => sum + point.y, 0) / depthPoints.length }}><i/><i/><i/><span>estimated depth contours</span></div>}
             {manualAnnotations.length > 0 && <svg className="point-leaders" style={annotationDisplayStyle} viewBox={`0 0 ${CANVAS.width} ${CANVAS.height}`} shapeRendering="geometricPrecision" aria-hidden="true">
@@ -1632,7 +2013,7 @@ export default function ScubaMapMaker() {
               </Fragment>;
             })}
             <div className={`north-arrow map-furniture${exportClass(exportSettings.mapFurniture)}`}><b>N</b><svg viewBox="0 0 34 56" aria-hidden="true"><path d="M17 2 31 46 17 39 3 46 17 2Z"/><path d="m17 2 14 44-14-7V2Z"/></svg></div><div className={`scale-bar map-furniture${exportClass(exportSettings.mapFurniture)}`}><i style={{ width: mapBar.pixels }}/><span>{formatNumber(mapBar.value)} {project.distanceUnit}</span></div><div className={`map-units map-furniture${exportClass(exportSettings.mapFurniture)}`}>distance: {UNIT_LABEL[project.distanceUnit]} · depth: {UNIT_LABEL[project.depthUnit]}</div>
-            {(tool === "route" || tool === "point") && <div className="map-placement-capture print-hidden" aria-hidden="true"/>}
+            {(tool === "route" || tool === "point" || tool === "feature") && <div className="map-placement-capture print-hidden" aria-hidden="true"/>}
             </div>
           </div>
           {smartCalloutCandidate && <>
@@ -1659,6 +2040,23 @@ export default function ScubaMapMaker() {
             <button onClick={cancelRouteDrawing}>Cancel</button>
           </div>}
 
+          {featureModePickerOpen && !featureDraft && <div className="feature-mode-picker print-hidden" role="dialog" aria-label="Choose feature drawing mode">
+            <p>Draw a map feature</p>
+            <div className="feature-mode-grid">
+              <button onClick={() => beginFeatureDrawing("freehand")}><SoundingsIcon name="feature"/>Freehand</button>
+              <button onClick={() => beginFeatureDrawing("spline")}><SoundingsIcon name="feature"/>Smooth spline</button>
+              <button onClick={() => beginFeatureDrawing("polyline")}><SoundingsIcon name="feature"/>Connected line</button>
+            </div>
+            <button className="feature-mode-cancel" onClick={cancelFeatureDrawing}>Cancel</button>
+          </div>}
+
+          {featureDraft && <div className="feature-draw-controls print-hidden" role="toolbar" aria-label="Feature drawing controls">
+            <span>{GEOGRAPHIC_FEATURE_MODE_LABELS[featureDraft.mode]} · {featureDraft.mode === "freehand" ? "drag to draw" : `${featureDraft.points.length} ${featureDraft.points.length === 1 ? "anchor" : "anchors"}`}</span>
+            <button disabled={featureDraft.mode === "freehand" || featureDraft.points.length === 0} onClick={undoFeatureDraftPoint}>Undo</button>
+            <button className="primary" disabled={featureDraft.mode === "freehand" || featureDraft.points.length < 2} onClick={finishFeatureDrawing}>Finish</button>
+            <button onClick={cancelFeatureDrawing}>Cancel</button>
+          </div>}
+
           <nav ref={dockRef} className={`tool-dock print-hidden${dockPosition ? " positioned" : ""}${dockDragging ? " dragging" : ""}`} style={toolDockStyle} aria-label="Map tools" onWheel={(event) => event.stopPropagation()}>
             <button type="button" className="tool-dock-handle" aria-label="Move map tools" aria-describedby="tool-dock-help" title="Drag to move · Arrow keys nudge · Home resets" onPointerDown={startDockDrag} onPointerMove={moveDock} onPointerUp={finishDockDrag} onPointerCancel={finishDockDrag} onKeyDown={moveDockWithKeyboard}>
               <span className="tool-dock-grip" aria-hidden="true"><i/><i/><i/><i/><i/><i/></span>
@@ -1666,18 +2064,22 @@ export default function ScubaMapMaker() {
             <span className="sr-only" id="tool-dock-help">Drag to move the toolbox. Use the arrow keys to nudge it, Shift with an arrow key to move farther, or Home to reset its position.</span>
             <DockButton icon="select" label="Select" active={tool === "select" && activePanel !== "survey"} onClick={() => { setTool("select"); setActivePanel(null); }}/>
             <DockButton icon="shoreline" label="Shoreline" active={tool === "coast"} disabled={project.shoreLocked} onClick={() => { setTool("coast"); setActivePanel(null); }}/>
+            <DockButton icon="feature" label="Draw Feature" active={tool === "feature" || featureModePickerOpen} onClick={openFeatureModePicker}/>
             <DockButton icon="route" label="Draw Route" active={tool === "route"} onClick={() => beginRouteDrawing()}/>
             <DockButton icon="print-area" label="Print Area" active={tool === "printArea"} onClick={() => { setTool("printArea"); setActivePanel(null); setNotice("Drag a rectangle over the map to set the PDF print area."); }}/>
           </nav>
 
           <div className="notice-toast print-hidden" role="status" aria-live="polite"><span className="status-dot"/>{notice}</div>
 
-          {!activePanel && <aside className="context-stack print-hidden" aria-label="Map inspector">
+          {!activePanel && !featureModePickerOpen && !featureDraft && <aside className="context-stack print-hidden" aria-label="Map inspector">
             <section className={`floating-panel layers-panel${layersOpen ? "" : " collapsed"}`}>
               <button className="layers-heading" aria-expanded={layersOpen} onClick={() => setLayersOpen((open) => !open)}><span><SoundingsIcon name="layers"/>Layers</span><SoundingsIcon name="chevron"/></button>
               {layersOpen && <div className="layer-list">
                 <label><span><SoundingsIcon name="eye"/>Reference</span><input className="switch" type="checkbox" checked={project.reference.visible} onChange={(event) => mutate((current) => ({ ...current, reference: { ...current.reference, visible: event.target.checked } }), false)}/></label>
                 <label><span><SoundingsIcon name="shoreline"/>Shoreline</span><input className="switch" type="checkbox" checked={visibleLayers.shoreline} onChange={(event) => setVisibleLayers((layers) => ({ ...layers, shoreline: event.target.checked }))}/></label>
+                <p className="layer-group-title">Features</p>
+                <label><span><SoundingsIcon name="feature"/>Map features</span><input className="switch" type="checkbox" checked={visibleLayers.geographicFeatures} onChange={(event) => setVisibleLayers((layers) => ({ ...layers, geographicFeatures: event.target.checked }))}/></label>
+                <label><span className="label-glyph compact">Ab</span><span className="layer-name">Feature labels</span><input className="switch" type="checkbox" checked={visibleLayers.geographicFeatureLabels} onChange={(event) => setVisibleLayers((layers) => ({ ...layers, geographicFeatureLabels: event.target.checked }))}/></label>
                 <p className="layer-group-title">Routes</p>
                 <label><span><SoundingsIcon name="route"/>Routes</span><input className="switch" type="checkbox" checked={visibleLayers.routes} onChange={(event) => setVisibleLayers((layers) => ({ ...layers, routes: event.target.checked }))}/></label>
                 <label><span className="label-glyph">°</span><span className="layer-name">Route labels</span><input className="switch" type="checkbox" checked={visibleLayers.routeLabels} onChange={(event) => setVisibleLayers((layers) => ({ ...layers, routeLabels: event.target.checked }))}/></label>
@@ -1698,16 +2100,25 @@ export default function ScubaMapMaker() {
 
             {activePanel === "survey" && <>
               <PanelHeading icon="route" title="Survey" onClose={() => setActivePanel(null)}/>
-              <div className="survey-tabs" role="tablist" aria-label="Survey workspace"><button role="tab" aria-selected={surveyTab === "routes"} className={surveyTab === "routes" ? "active" : ""} onClick={() => setSurveyTab("routes")}>Routes</button><button role="tab" aria-selected={surveyTab === "points"} className={surveyTab === "points" ? "active" : ""} onClick={() => setSurveyTab("points")}>Points</button></div>
+              <div className="survey-tabs" role="tablist" aria-label="Survey workspace"><button role="tab" aria-selected={surveyTab === "routes"} className={surveyTab === "routes" ? "active" : ""} onClick={() => setSurveyTab("routes")}>Routes</button><button role="tab" aria-selected={surveyTab === "points"} className={surveyTab === "points" ? "active" : ""} onClick={() => setSurveyTab("points")}>Points</button><button onClick={() => setSurveyTab("features")} role="tab" aria-selected={surveyTab === "features"} className={surveyTab === "features" ? "active" : ""}>Features</button></div>
               <div className="drawer-body survey-body">
                 {surveyTab === "routes" ? <>
                   <section className="survey-route-editor"><div className="survey-section-title"><span>Routes</span><button onClick={() => beginRouteDrawing()}>＋ Draw route</button></div>{routeEditor(true)}</section>
                   <details className="calibration-section"><summary>Scale calibration <small>{formatNumber(mapScale(project))} m / px</small></summary><label>Reference segment<select value={selectedVectorId ?? ""} onChange={(event) => { const vector = project.vectors.find((item) => item.id === event.target.value); if (vector) selectVector(vector); else setSelectedVectorId(null); }}><option value="">Select a route segment</option>{project.vectors.map((vector) => { const start = nodeMap.get(vector.fromId); const end = nodeMap.get(vector.toId); const route = routeForVector(routes, vector.id); return <option value={vector.id} key={vector.id}>{route ? `${routeDisplayName(route)} · ` : ""}{nodeLabel(start)} → {nodeLabel(end)}</option>; })}</select></label>{selectedVector && selectedRouteLine ? <><div className="field-grid"><label>Known distance<input inputMode="decimal" value={calibrationForm.distance} onChange={(event) => setCalibrationForm({ ...calibrationForm, distance: event.target.value })}/></label><label>Unit<select value={calibrationForm.unit} onChange={(event) => setCalibrationForm({ ...calibrationForm, unit: event.target.value as Unit })}>{Object.entries(UNIT_LABEL).map(([value, name]) => <option value={value} key={value}>{name}</option>)}</select></label></div><button className="secondary-button full-width" onClick={calibrateMap}><SoundingsIcon name="calibrate"/>Set map scale</button></> : <p className="drawer-copy">Select a segment to establish real-world scale.</p>}</details>
-                </> : <>
+                </> : surveyTab === "points" ? <>
                   <div className="point-toolbar"><label className="point-search"><span className="sr-only">Search points</span><input type="search" value={pointSearch} placeholder="Search points" onChange={(event) => setPointSearch(event.target.value)}/></label><div className="point-filters" aria-label="Point filters">{(["all", "named", "unnamed"] as PointFilter[]).map((filter) => <button className={pointFilter === filter ? "active" : ""} key={filter} onClick={() => setPointFilter(filter)}>{filter[0].toUpperCase() + filter.slice(1)}</button>)}</div><div className="point-capture-actions"><button onClick={() => { setTool("point"); setActivePanel(null); setNotice("Place a field point on the map."); }}><SoundingsIcon name="point"/>Add point</button></div></div>
-                  <div className="survey-point-list" aria-label="Points">{filteredPoints.map((point) => { const memberships = routeMembershipsForPoint(point.id); return <button className={selectedId === point.id ? "active" : ""} key={point.id} onClick={() => { setSelectedId(point.id); setSelectedVectorId(null); setSelectedRouteId(null); setSelectedRouteVertexId(null); }}><span className="point-list-marker">{point.symbol ? <PointSymbolImage symbol={point.symbol}/> : point.label}</span><span><b>{point.name?.trim() || point.label}</b><small>{point.name?.trim() ? point.label : "Point of interest"}{memberships.length ? ` · ${memberships.map(({ route }) => routeDisplayName(route)).join(", ")}` : " · Not assigned"}</small></span><em>{formatDepth(point, project.depthUnit)}</em></button>; })}{!filteredPoints.length && <div className="empty-panel"><SoundingsIcon name="point"/><h3>No matching points</h3><p>Change the search or filter, or add a point on the map.</p></div>}</div>
+                  <div className="survey-point-list" aria-label="Points">{filteredPoints.map((point) => { const memberships = routeMembershipsForPoint(point.id); return <button className={selectedId === point.id ? "active" : ""} key={point.id} onClick={() => { setSelectedId(point.id); setSelectedVectorId(null); setSelectedRouteId(null); setSelectedRouteVertexId(null); setSelectedFeatureId(null); }}><span className="point-list-marker">{point.symbol ? <PointSymbolImage symbol={point.symbol}/> : point.label}</span><span><b>{point.name?.trim() || point.label}</b><small>{point.name?.trim() ? point.label : "Point of interest"}{memberships.length ? ` · ${memberships.map(({ route }) => routeDisplayName(route)).join(", ")}` : " · Not assigned"}</small></span><em>{formatDepth(point, project.depthUnit)}</em></button>; })}{!filteredPoints.length && <div className="empty-panel"><SoundingsIcon name="point"/><h3>No matching points</h3><p>Change the search or filter, or add a point on the map.</p></div>}</div>
                   {pointInspector}
                   <div className="survey-data-actions"><button className="secondary-button" onClick={openPointTableWindow}><SoundingsIcon name="table"/>Open data table</button><button className="secondary-button" onClick={exportFieldCapture}><SoundingsIcon name="export"/>Share field capture</button></div>
+                </> : <>
+                  <section className="survey-feature-editor">
+                    <div className="survey-section-title"><span>Map features</span><button onClick={openFeatureModePicker}>＋ Draw feature</button></div>
+                    <ul className="feature-list" aria-label="Map features">
+                      {project.geographicFeatures.map((feature, index) => <li key={feature.id}><button className={`feature-list-item${selectedFeatureId === feature.id ? " active" : ""}`} aria-selected={selectedFeatureId === feature.id} onClick={() => selectGeographicFeature(feature.id, false)}><span><b>{feature.name.trim() || `Untitled feature ${index + 1}`}</b><small>{GEOGRAPHIC_FEATURE_MODE_LABELS[feature.mode]} · {feature.closed ? "Closed" : "Open"}</small></span><i className="feature-list-swatch" aria-hidden="true" style={{ "--feature-list-color": feature.style.color, "--feature-list-width": `${feature.style.width}px`, "--feature-list-dash": featureDashArray(feature.style.dash, feature.style.width, 1) || "none" } as CSSProperties}/></button></li>)}
+                    </ul>
+                    {!project.geographicFeatures.length && <div className="empty-panel"><SoundingsIcon name="feature"/><h3>No map features</h3><p>Draw a freehand trace, smooth spline, or connected line without changing the shoreline or routes.</p></div>}
+                  </section>
+                  {featureInspector}
                 </>}
               </div>
             </>}
@@ -1720,7 +2131,7 @@ export default function ScubaMapMaker() {
                 {printArea && <p className="print-area-note">Selected area: {Math.round(printArea.width)} × {Math.round(printArea.height)} map pixels · {printPoints.length} point{printPoints.length === 1 ? "" : "s"} in PDF</p>}
                 <div className="drawer-section export-settings">
                   <h3>PDF layers</h3>
-                  <div className="export-grid">{([ ["reference", "Reference image"], ["shoreline", "Shoreline"], ["routes", "Route lines"], ["routeLabels", "Route bearings & distances"], ["routeNameLabels", "Named route labels"], ["pointMarkers", "Point markers"], ["pointNames", "Point Names (P1, P2)"], ["fullPointNames", "Names (Swim platform)"], ["depths", "Depths"], ["contours", "Depth contours"], ["mapFurniture", "North arrow & scale"], ["pointTable", "Point detail table"] ] as Array<[ExportToggleKey, string]>).map(([setting, label]) => <label key={setting}><input type="checkbox" checked={exportSettings[setting]} onChange={(event) => setExportSetting(setting, event.target.checked)}/>{label}</label>)}</div>
+                  <div className="export-grid">{([ ["reference", "Reference image"], ["shoreline", "Shoreline"], ["geographicFeatures", "Map features"], ["geographicFeatureLabels", "Feature labels"], ["routes", "Route lines"], ["routeLabels", "Route bearings & distances"], ["routeNameLabels", "Named route labels"], ["pointMarkers", "Point markers"], ["pointNames", "Point Names (P1, P2)"], ["fullPointNames", "Names (Swim platform)"], ["depths", "Depths"], ["contours", "Depth contours"], ["mapFurniture", "North arrow & scale"], ["pointTable", "Point detail table"] ] as Array<[ExportToggleKey, string]>).map(([setting, label]) => <label key={setting}><input type="checkbox" checked={exportSettings[setting]} onChange={(event) => setExportSetting(setting, event.target.checked)}/>{label}</label>)}</div>
                 </div>
                 <div className="drawer-section name-placement-section">
                   <h3>Name placement</h3>
@@ -1742,7 +2153,7 @@ export default function ScubaMapMaker() {
 
           {visibleLayers.mapFurniture && <><div className="screen-north print-hidden"><b>N</b><svg viewBox="0 0 34 56" aria-hidden="true"><path d="M17 2 31 46 17 39 3 46 17 2Z"/><path d="m17 2 14 44-14-7V2Z"/></svg></div><div className="screen-scale print-hidden"><div className="scale-labels"><span>0</span><span>{formatNumber(mapBar.value / 2)}</span><span>{formatNumber(mapBar.value)} {project.distanceUnit}</span></div><i/></div></>}
           <div className="zoom-controls print-hidden"><button aria-label="Zoom out" onClick={() => changeMapZoom(1 / 1.25)}>−</button><span>{Math.round(zoom * 100)}%</span><button aria-label="Zoom in" onClick={() => changeMapZoom(1.25)}>＋</button><button className="recenter-button" aria-label="Recenter map" onClick={fitMapToStage}><SoundingsIcon name="recenter"/></button></div>
-          <div className="map-readout print-hidden"><span>{formatNumber(mapScale(project))} m / px</span><span>{project.waypoints.length} {project.waypoints.length === 1 ? "point" : "points"}</span><span>{routes.length} {routes.length === 1 ? "route" : "routes"}</span></div>
+          <div className="map-readout print-hidden"><span>{formatNumber(mapScale(project))} m / px</span><span>{project.waypoints.length} {project.waypoints.length === 1 ? "point" : "points"}</span><span>{routes.length} {routes.length === 1 ? "route" : "routes"}</span><span>{project.geographicFeatures.length} {project.geographicFeatures.length === 1 ? "feature" : "features"}</span></div>
         </div>
         <section className="print-details"><h2>{project.title}</h2><p>{project.notes || "Dive-site sketch prepared with Soundings."}</p><p className="print-scale">Scale: {formatNumber(mapScale(project))} meters per map pixel · {formatNumber(mapBar.value)} {project.distanceUnit} scale bar</p><table className={exportClass(exportSettings.pointTable)}><thead><tr><th>Point</th><th>Name</th><th>Depth</th><th>Position</th></tr></thead><tbody>{printPoints.map((point) => <tr key={point.id}><td>{point.label}</td><td>{point.name || "—"}</td><td>{formatDepth(point, project.depthUnit)}</td><td>{Math.round(point.x)}, {Math.round(point.y)}</td></tr>)}</tbody></table></section>
       </section>
