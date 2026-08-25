@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { access, readFile } from "node:fs/promises";
 import { test } from "node:test";
-import { POINT_SYMBOLS, normalizePointSymbol, pointSymbolDefinition } from "../app/projects/scuba-map-maker/point-symbols.ts";
+import { DEFAULT_POINT_SYMBOL_SCALE, MAX_POINT_SYMBOL_SCALE, MIN_POINT_SYMBOL_SCALE, POINT_SYMBOLS, normalizePointSymbol, normalizePointSymbolScale, pointSymbolDefinition } from "../app/projects/scuba-map-maker/point-symbols.ts";
 
 test("the Scuba Map Maker ships the complete supplied symbol catalog", async () => {
   assert.equal(POINT_SYMBOLS.length, 16);
@@ -17,6 +17,15 @@ test("saved symbols normalize safely and both editing surfaces render", async ()
   assert.equal(normalizePointSymbol("shipwreck"), "shipwreck");
   assert.equal(normalizePointSymbol("unsupported"), undefined);
   assert.equal(normalizePointSymbol(null), undefined);
+  assert.equal(DEFAULT_POINT_SYMBOL_SCALE, 1);
+  assert.equal(MIN_POINT_SYMBOL_SCALE, 0.5);
+  assert.equal(MAX_POINT_SYMBOL_SCALE, 2);
+  assert.equal(normalizePointSymbolScale(undefined), 1);
+  assert.equal(normalizePointSymbolScale(Number.NaN), 1);
+  assert.equal(normalizePointSymbolScale("1.5"), 1);
+  assert.equal(normalizePointSymbolScale(0.1), 0.5);
+  assert.equal(normalizePointSymbolScale(1.26), 1.3);
+  assert.equal(normalizePointSymbolScale(9), 2);
 
   const page = await readFile(new URL("../app/projects/scuba-map-maker/page.tsx", import.meta.url), "utf8");
   assert.match(page, /PointSymbolPicker/);
@@ -53,10 +62,16 @@ test("keeps Scuba Map Maker route vectors clear of visible point symbols on scre
   assert.match(maskedRouteInk, /route-selection-line/);
   assert.match(maskedRouteInk, /route-direction/);
 
-  assert.match(page, /"--route-symbol-cutout-radius": `\$\{30 \/ zoom\}px`/);
-  assert.match(page, /"--print-route-symbol-cutout-radius": `\$\{20 \/ effectivePrintScale\}px`/);
-  assert.match(page, /"--point-symbol-size": `\$\{38 \/ zoom\}px`/);
-  assert.match(page, /"--print-point-symbol-size": `\$\{24 \/ effectivePrintScale\}px`/);
+  assert.match(page, /pointSymbolScale\?: number/);
+  assert.match(page, /import \{[^}]*DEFAULT_POINT_SYMBOL_SCALE[^}]*MAX_POINT_SYMBOL_SCALE[^}]*MIN_POINT_SYMBOL_SCALE[^}]*normalizePointSymbolScale[^}]*\} from "\.\/point-symbols";/);
+  assert.match(page, /project\.pointSymbolScale = normalizePointSymbolScale\(project\.pointSymbolScale\);/);
+  assert.match(page, /Map symbols/);
+  assert.match(page, /aria-label="Map icon size" type="range" min=\{MIN_POINT_SYMBOL_SCALE\} max=\{MAX_POINT_SYMBOL_SCALE\} step="0\.1"/);
+  assert.match(page, /"--route-symbol-cutout-radius": `\$\{30 \* pointSymbolScale \/ zoom\}px`/);
+  assert.match(page, /"--print-route-symbol-cutout-radius": `\$\{20 \* pointSymbolScale \/ effectivePrintScale\}px`/);
+  assert.match(page, /"--point-symbol-size": `\$\{38 \* pointSymbolScale \/ zoom\}px`/);
+  assert.match(page, /"--print-point-symbol-size": `\$\{24 \* pointSymbolScale \/ effectivePrintScale\}px`/);
+  assert.match(page, /width=\{smartCalloutSymbolSize\.width\} height=\{smartCalloutSymbolSize\.height\}/);
   assert.match(styles, /\.route-symbol-mask \{ mask-type: luminance; \}/);
   assert.match(styles, /\.route-symbol-cutout \{ r: var\(--route-symbol-cutout-radius, 30px\); \}/);
   assert.match(styles, /@media print[\s\S]*\.route-network \{[^}]*--route-symbol-cutout-radius: var\(--print-route-symbol-cutout-radius\) !important;/);
