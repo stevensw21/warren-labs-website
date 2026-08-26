@@ -43,7 +43,7 @@ test("keeps Scuba Map Maker route vectors clear of visible point symbols on scre
 
   assert.match(page, /const routeSymbolPoints = project\.waypoints\.filter\(\(point\) => point\.symbol\);/);
   assert.match(page, /<mask id="route-symbol-clearance-mask" className="route-symbol-mask" maskUnits="userSpaceOnUse" maskContentUnits="userSpaceOnUse"/);
-  assert.match(page, /<rect[^>]*width=\{CANVAS\.width\}[^>]*height=\{CANVAS\.height\}[^>]*fill="white"\/>/);
+  assert.match(page, /<rect[^>]*width=\{canvasSize\.width\}[^>]*height=\{canvasSize\.height\}[^>]*fill="white"\/>/);
 
   const symbolCutouts = page.match(/\{routeSymbolPoints\.map\(\(point\) => <circle[\s\S]*?\/>\)\}/)?.[0] ?? "";
   assert.ok(symbolCutouts, "every symbol-bearing point of interest should create a route mask cutout");

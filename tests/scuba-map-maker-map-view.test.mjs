@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { clampDockPosition } from "../app/projects/scuba-map-maker/map-view.ts";
+import { clampDockPosition, fitMapView } from "../app/projects/scuba-map-maker/map-view.ts";
 
 const STAGE = { width: 800, height: 600 };
 const DOCK = { width: 128, height: 250 };
@@ -65,4 +65,14 @@ test("returns finite bounds for extreme finite inputs", () => {
   assert.ok(Number.isFinite(result.top));
   assert.ok(result.left >= 12);
   assert.equal(result.top, 12);
+});
+
+test("manually fits an extended canvas below the compact startup zoom", () => {
+  const startup = fitMapView(800, 600, 2400, 1600);
+  assert.deepEqual(startup, { zoom: 0.78, pan: { x: 22, y: 24 } });
+
+  const recentered = fitMapView(800, 600, 2400, 1600, 0.1);
+  assert.ok(Math.abs(recentered.zoom - 752 / 2400) < 1e-9);
+  assert.ok(Math.abs(recentered.pan.x - 24) < 1e-9);
+  assert.ok(Math.abs(recentered.pan.y - 148 / 3) < 1e-9);
 });

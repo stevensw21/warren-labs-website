@@ -340,7 +340,7 @@ test("ships v2 named route drawing across editor, map, backup, and PDF surfaces"
   assert.match(page, /window\.addEventListener\("resize", refit\)/);
   assert.match(page, /window\.visualViewport\?\.addEventListener\("resize", refit\)/);
   assert.match(page, /const changeMapZoom = useCallback[\s\S]*?autoFitRef\.current = false;/);
-  assert.match(page, /aria-label="Recenter map" onClick=\{fitMapToStage\}/);
+  assert.match(page, /aria-label="Recenter map" onClick=\{fitEntireMapToStage\}/);
 
   assert.match(routeModel, /type RouteStep = \{ vectorId: string; reversed: boolean \}/);
   assert.match(routeModel, /type SavedRoute = \{ id: string; name: string; steps: RouteStep\[\] \}/);
@@ -371,7 +371,7 @@ test("keeps route vectors clear of visible point symbols on screen and in PDF", 
 
   assert.match(page, /const routeSymbolPoints = project\.waypoints\.filter\(\(point\) => point\.symbol\);/);
   assert.match(page, /<mask id="route-symbol-clearance-mask" className="route-symbol-mask" maskUnits="userSpaceOnUse" maskContentUnits="userSpaceOnUse"/);
-  assert.match(page, /<rect[^>]*width=\{CANVAS\.width\}[^>]*height=\{CANVAS\.height\}[^>]*fill="white"\/>/);
+  assert.match(page, /<rect[^>]*width=\{canvasSize\.width\}[^>]*height=\{canvasSize\.height\}[^>]*fill="white"\/>/);
 
   const symbolCutouts = page.match(/\{routeSymbolPoints\.map\(\(point\) => <circle[\s\S]*?\/>\)\}/)?.[0] ?? "";
   assert.ok(symbolCutouts, "every symbol-bearing point of interest should create a route mask cutout");

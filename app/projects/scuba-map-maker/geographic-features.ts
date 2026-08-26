@@ -1,3 +1,5 @@
+import { DEFAULT_CANVAS_SIZE, normalizeCanvasSize, type CanvasSize } from "./canvas-size.ts";
+
 export type FeaturePoint = { id: string; x: number; y: number };
 
 export type GeographicFeatureMode = "freehand" | "spline" | "polyline";
@@ -30,8 +32,6 @@ export const DEFAULT_GEOGRAPHIC_FEATURE_STYLE: GeographicFeatureStyle = {
   dash: "solid",
 };
 
-const MAP_WIDTH = 1200;
-const MAP_HEIGHT = 800;
 const MIN_FEATURE_WIDTH = 1;
 const MAX_FEATURE_WIDTH = 8;
 const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
@@ -381,14 +381,16 @@ export function translateGeographicFeature(
   feature: GeographicFeature,
   deltaX: number,
   deltaY: number,
+  bounds: CanvasSize = DEFAULT_CANVAS_SIZE,
 ): GeographicFeature {
   const finitePoints = feature.points.filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
   if (!finitePoints.length) return { ...feature, style: { ...feature.style }, points: feature.points.map((point) => ({ ...point })) };
 
   const xs = finitePoints.map((point) => point.x);
   const ys = finitePoints.map((point) => point.y);
-  const appliedX = clampedTranslation(deltaX, -Math.min(...xs), MAP_WIDTH - Math.max(...xs));
-  const appliedY = clampedTranslation(deltaY, -Math.min(...ys), MAP_HEIGHT - Math.max(...ys));
+  const canvasSize = normalizeCanvasSize(bounds);
+  const appliedX = clampedTranslation(deltaX, -Math.min(...xs), canvasSize.width - Math.max(...xs));
+  const appliedY = clampedTranslation(deltaY, -Math.min(...ys), canvasSize.height - Math.max(...ys));
 
   return {
     ...feature,

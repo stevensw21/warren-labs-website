@@ -28,14 +28,17 @@ export function clampDockPosition(position: DockPosition, stageSize: DockSize, d
   };
 }
 
-export function fitMapView(stageWidth: number, stageHeight: number, canvasWidth: number, canvasHeight: number): MapView {
+export function fitMapView(stageWidth: number, stageHeight: number, canvasWidth: number, canvasHeight: number, minimumZoom = DEFAULT_MAP_ZOOM): MapView {
   const availableWidth = stageWidth - MAP_FIT_PADDING * 2;
   const availableHeight = stageHeight - MAP_FIT_PADDING * 2;
-  const zoom = Math.min(availableWidth / canvasWidth, availableHeight / canvasHeight);
+  const fittedZoom = Math.min(availableWidth / canvasWidth, availableHeight / canvasHeight);
 
-  if (!Number.isFinite(zoom) || zoom <= DEFAULT_MAP_ZOOM) {
+  if (!Number.isFinite(fittedZoom) || fittedZoom <= 0) {
     return { zoom: DEFAULT_MAP_ZOOM, pan: { ...DEFAULT_MAP_PAN } };
   }
+
+  if (fittedZoom <= minimumZoom && minimumZoom === DEFAULT_MAP_ZOOM) return { zoom: DEFAULT_MAP_ZOOM, pan: { ...DEFAULT_MAP_PAN } };
+  const zoom = Math.max(minimumZoom, fittedZoom);
 
   return {
     zoom,

@@ -195,3 +195,14 @@ test("translates a feature as one shape and clamps its bounds to the 1200x800 ca
   assert.deepEqual(movedWithinBounds.points, [point("a", 100, 400), point("b", 190, 500)]);
   assert.deepEqual(translateGeographicFeature(original, Number.NaN, Number.POSITIVE_INFINITY).points, original.points);
 });
+
+test("translates a feature within supplied extended canvas bounds", () => {
+  const original = feature({
+    points: [point("a", 1_100, 700), point("b", 1_190, 790)],
+  });
+
+  const translated = translateGeographicFeature(original, 500, 500, { width: 1_600, height: 1_100 });
+
+  assert.deepEqual(translated.points, [point("a", 1_510, 1_010), point("b", 1_600, 1_100)]);
+  assert.deepEqual(original.points, [point("a", 1_100, 700), point("b", 1_190, 790)]);
+});
