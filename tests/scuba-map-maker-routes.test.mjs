@@ -92,9 +92,10 @@ test("ships the Warren Labs local-first Scuba Map Maker", async () => {
   assert.match(page, /title="Export"/);
   assert.match(page, />Layers</);
   assert.match(page, /Route lines/);
-  assert.match(page, /DEFAULT_EXPORT_SETTINGS/);
-  assert.match(page, /type ExportSettings = \{[^}]*pointMarkers: boolean;/s);
-  assert.match(page, /DEFAULT_EXPORT_SETTINGS: ExportSettings = \{[^}]*pointMarkers: true,/s);
+  assert.match(page, /CLEAN_CHART_EXPORT_SETTINGS/);
+  assert.match(page, /FULL_DETAIL_EXPORT_SETTINGS/);
+  assert.match(page, /type ExportSettings,/);
+  assert.match(page, /normalizeExportSettings\(stored\.exportSettings\)/);
   assert.match(page, /fullPointNames/);
   assert.match(page, /project\.waypoints\.map\(\(point\)/);
   assert.match(page, /type PrintArea/);
@@ -103,12 +104,12 @@ test("ships the Warren Labs local-first Scuba Map Maker", async () => {
   assert.match(page, /pointInPrintArea/);
   assert.match(page, /Set print area/);
   assert.match(page, /Clear print area/);
-  assert.match(page, /printPoints\.map/);
+  assert.match(page, /printPointTableChunks\.map/);
   assert.match(page, /printAreaDraw/);
   assert.match(page, /printAreaAdjust/);
   assert.match(page, /Print with selected settings/);
   assert.match(styles, /\.route-network-selection, \.vector-line \{ display: none !important; \}/);
-  assert.match(styles, /\.point-dot \{ background: #174b5c !important; border: 0 !important; box-shadow: none !important; height: var\(--print-point-marker-size\) !important; width: var\(--print-point-marker-size\) !important; \}/);
+  assert.match(styles, /\.point-dot \{[^}]*width: var\(--print-point-marker-size\) !important;[^}]*height: var\(--print-point-marker-size\) !important;[^}]*border: 0 !important;[^}]*background: #174b5c !important;[^}]*box-shadow: none !important;/);
   assert.match(styles, /\.print-area-overlay/);
   assert.match(styles, /\.map-stage\.has-print-area/);
   assert.match(page, /tool === "select"/);
@@ -217,7 +218,7 @@ test("separates editable route vertices from point-of-interest detail layers", a
 
   assert.match(page, /project\.waypoints\.map\(\(point\) =>\s*\{[\s\S]*?return <button\b/);
   assert.match(page, /className=\{`waypoint named-point\$\{point\.symbol \? " has-symbol" : ""\}/);
-  assert.match(page, /\{point\.symbol \? <PointSymbolImage className=\{`point-symbol-marker\$\{exportClass\(exportSettings\.pointMarkers\)\}`\} symbol=\{point\.symbol\}\/> : <span className=\{`point-dot\$\{exportClass\(exportSettings\.pointMarkers\)\}`\}\/>\}/);
+  assert.match(page, /\{point\.symbol \? <PointSymbolImage className=\{`point-symbol-marker\$\{exportClass\(printSettings\.pointMarkers\)\}`\} symbol=\{point\.symbol\}\/> : <span className=\{`point-dot\$\{exportClass\(printSettings\.pointMarkers\)\}`\}\/>\}/);
   assert.doesNotMatch(page, /junction-point|junction-handle/);
   assert.match(styles, /\.point-dot \{[^}]*border:\s*0;[^}]*box-shadow:\s*inset 0 0 0 var\(--point-dot-border/);
   assert.match(page, /const selectedRouteVertexIds = \[\.\.\.new Set\(selectedRoutePointIds\.filter/);
@@ -242,14 +243,14 @@ test("separates editable route vertices from point-of-interest detail layers", a
   assert.ok(waypointClass, "waypoint hit target should remain independently rendered");
   assert.doesNotMatch(waypointClass, /exportSettings\.(?:pointMarkers|pointNames|fullPointNames|depths)/);
   assert.doesNotMatch(waypointClass, /visibleLayers\.(?:pointNames|names|depths)/);
-  assert.match(page, /<span\b[^>]*point-dot[^>]*exportSettings\.pointMarkers[^>]*>/);
+  assert.match(page, /<span\b[^>]*point-dot[^>]*printSettings\.pointMarkers[^>]*>/);
   assert.match(page, /annotationScreenVisible[\s\S]*visibleLayers\.pointNames[\s\S]*visibleLayers\.names[\s\S]*visibleLayers\.depths/);
-  assert.match(page, /annotationPrintVisible[\s\S]*exportSettings\.pointNames[\s\S]*exportSettings\.fullPointNames[\s\S]*exportSettings\.depths/);
+  assert.match(page, /annotationPrintVisible[\s\S]*printSettings\.pointNames[\s\S]*printSettings\.fullPointNames[\s\S]*printSettings\.depths/);
   assert.match(page, /data-annotation-kind=\{annotationKind\}/);
   assert.match(page, /data-manual-position=\{offset \? "true" : "false"\}/);
   assert.match(page, /point-annotation-chip point-annotation-\$\{annotationKind\}/);
   assert.match(page, /vector-label[^>]*visibleLayers\.routeLabels/);
-  assert.match(page, /reference-image[^>]*project\.reference\.visible[^>]*exportSettings\.reference/);
+  assert.match(page, /reference-image[^>]*project\.reference\.visible[^>]*printSettings\.reference/);
   assert.doesNotMatch(page, /project\.reference\.dataUrl && project\.reference\.visible/);
   assert.match(page, /vector-line[^>]*visibleLayers\.routes/);
   assert.doesNotMatch(page, /vector-group[^>]*visibleLayers\.routes/);
@@ -265,8 +266,8 @@ test("separates editable route vertices from point-of-interest detail layers", a
   assert.match(styles, /\.point-leader \{[^}]*stroke-width:\s*var\(--point-leader-width[^}]*stroke-linecap:\s*round;/);
   assert.match(styles, /\.point-annotation-manual \{[^}]*min-width:\s*var\(--annotation-manual-hit[^}]*transform:\s*translate\(-50%, -50%\);/);
   assert.match(styles, /\.point-leaders \{ --point-leader-width: var\(--print-point-leader-width\) !important; \}/);
-  assert.match(styles, /@media print[\s\S]*\.route-vertex-handle \{ display: none !important; \}/);
-  assert.match(styles, /\.map-stage \{ height: 576px; overflow: visible; background: white; \}/);
+  assert.match(styles, /@media print[\s\S]*\.route-draft-layer,[^}]*\.route-vertex-handle[^}]*\{ display: none !important; \}/);
+  assert.match(styles, /\.map-stage, \.map-stage\.has-print-area, \.map-stage\.smart-callout-mode \{[^}]*width:\s*980px !important;[^}]*height:\s*640px !important;[^}]*overflow:\s*hidden !important;/);
 });
 
 test("ships v2 named route drawing across editor, map, backup, and PDF surfaces", async () => {
@@ -321,18 +322,16 @@ test("ships v2 named route drawing across editor, map, backup, and PDF surfaces"
   assert.match(page, /routeLabelAnchor\(route, nodes, project\.vectors, printArea\)/);
   assert.match(page, /nodeLabel\(nodeMap\.get\(endpoints\.startId\)\)/);
   assert.match(page, /nodeLabel\(start, `Vertex \$\{index \+ 1\}`\)/);
-  assert.match(page, /type ExportSettings = \{[^}]*routeLabels: boolean; routeNameLabels: boolean;/);
-  assert.match(page, /DEFAULT_EXPORT_SETTINGS: ExportSettings = \{[^}]*routeLabels: true, routeNameLabels: true,/);
-  assert.match(page, /const routeNameLabels = savedExportSettings\.routeNameLabels \?\? savedExportSettings\.routeLabels \?\? DEFAULT_EXPORT_SETTINGS\.routeNameLabels;/);
-  assert.match(page, /project\.exportSettings = \{ \.\.\.DEFAULT_EXPORT_SETTINGS, \.\.\.savedExportSettings, routeNameLabels, namePlacement \};/);
+  assert.match(page, /effectiveExportSettings\(exportSettings\)/);
+  assert.match(page, /normalizeExportSettings\(stored\.exportSettings\)/);
   assert.match(page, /\["routeLabels", "Route bearings & distances"\], \["routeNameLabels", "Named route labels"\]/);
   assert.match(page, /"--route-name-angle": `\$\{anchor\.angleRadians\}rad`/);
   assert.match(page, /style=\{routeNameLabelStyle\(screen\)\}/);
-  assert.match(page, /style=\{routeNameLabelStyle\(print\)\}/);
+  assert.match(page, /style=\{routeNameLabelStyle\(clampPrintLabelAnchor\(print\)\)\}/);
   assert.match(page, /route-name-label route-name-label-print screen-hidden/);
-  assert.match(page, /vector-label[^>]*exportClass\(exportSettings\.routeLabels\)/);
-  assert.match(page, /route-name-label route-name-label-print screen-hidden\$\{exportClass\(exportSettings\.routeNameLabels\)\}/);
-  assert.doesNotMatch(page, /route-name-label route-name-label-print screen-hidden\$\{exportClass\(exportSettings\.routeLabels\)\}/);
+  assert.match(page, /vector-label[^>]*exportClass\(printSettings\.routeLabels\)/);
+  assert.match(page, /route-name-label route-name-label-print screen-hidden\$\{exportClass\(printSettings\.routeNameLabels\)\}/);
+  assert.doesNotMatch(page, /route-name-label route-name-label-print screen-hidden\$\{exportClass\(printSettings\.routeLabels\)\}/);
   assert.match(page, /aria-label=\{`Route \$\{route\.name\}`\}/);
   assert.match(page, /const routeHitHeight = 44 \/ zoom/);
   assert.match(page, /BroadcastChannel\("soundings-project-sync-v2"\)/);
@@ -359,7 +358,7 @@ test("ships v2 named route drawing across editor, map, backup, and PDF surfaces"
   assert.match(styles, /\.route-draw-controls \{[^}]*z-index:\s*45;[^}]*right:\s*300px;[^}]*bottom:\s*74px;/);
   assert.match(styles, /@media \(max-width: 1199px\)[\s\S]*?\.zoom-controls \{ bottom:\s*84px; \}/);
   assert.match(styles, /@media \(max-width: 767px\)[\s\S]*?\.route-draw-controls \{[^}]*bottom:\s*76px;/);
-  assert.match(styles, /@media print[\s\S]*\.route-name-label > span \{[^}]*background: rgba\(253,252,247,\.96\) !important;/);
+  assert.match(styles, /@media print[\s\S]*\.route-name-label > span \{[^}]*background: rgba\(255,255,255,\.97\) !important;/);
   assert.match(styles, /@media print[\s\S]*\.route-name-label \{[^}]*transform: translate\(-50%, 24%\) rotate\(var\(--route-name-angle, 0rad\)\) !important;/);
 });
 
@@ -376,7 +375,7 @@ test("keeps route vectors clear of visible point symbols on screen and in PDF", 
   const symbolCutouts = page.match(/\{routeSymbolPoints\.map\(\(point\) => <circle[\s\S]*?\/>\)\}/)?.[0] ?? "";
   assert.ok(symbolCutouts, "every symbol-bearing point of interest should create a route mask cutout");
   assert.match(symbolCutouts, /route-symbol-cutout/);
-  assert.match(symbolCutouts, /exportClass\(exportSettings\.pointMarkers && pointInPrintArea\(point, printArea\)\)/);
+  assert.match(symbolCutouts, /exportClass\(printSettings\.pointMarkers && pointInPrintArea\(point, printArea\)\)/);
   assert.match(symbolCutouts, /data-route-symbol-cutout=\{point\.id\}/);
   assert.match(symbolCutouts, /fill="black"/);
 
@@ -445,28 +444,33 @@ test("supports independently movable point annotations with compatible persisten
   assert.match(page, /point-leader-screen print-hidden/);
   assert.match(page, /point-leader-print screen-hidden/);
   assert.match(page, /annotationPrintVisible\(point, annotationKind\)/);
-  assert.match(page, /"--print-point-leader-width": `\$\{1 \/ effectivePrintScale\}px`/);
+  assert.match(page, /"--print-point-leader-width": `\$\{1\.15 \/ effectivePrintScale\}px`/);
   assert.match(styles, /\.point-annotation-auto \{[^}]*transform:\s*translate\(var\(--annotation-stack-x/);
   assert.match(styles, /@media \(hover: none\) and \(pointer: coarse\)[\s\S]*\.point-annotation-auto \{[^}]*min-height:\s*var\(--annotation-touch-hit/);
-  assert.match(page, /const PRINT_MAP_TEXT_SIZE = 10;/);
-  assert.match(page, /"--print-map-text-size": `\$\{PRINT_MAP_TEXT_SIZE \/ effectivePrintScale\}px`/);
+  assert.match(page, /const PRINT_PRIMARY_TEXT_SIZE = 12;/);
+  assert.match(page, /const PRINT_SECONDARY_TEXT_SIZE = 11;/);
+  assert.match(page, /"--print-primary-text-size": `\$\{PRINT_PRIMARY_TEXT_SIZE \/ effectivePrintScale\}px`/);
+  assert.match(page, /"--print-secondary-text-size": `\$\{PRINT_SECONDARY_TEXT_SIZE \/ effectivePrintScale\}px`/);
   assert.match(page, /"--print-map-label-padding-x": `\$\{4 \/ effectivePrintScale\}px`/);
   assert.match(page, /"--print-annotation-stack-x": `\$\{7 \/ effectivePrintScale\}px`/);
-  assert.match(page, /"--print-point-marker-size": `\$\{4 \/ effectivePrintScale\}px`/);
-  assert.match(page, /"--annotation-print-y": `\$\{\(-4 \+ Math\.max\(0, printAutomaticKinds\.indexOf\(annotationKind\)\) \* 12\) \/ effectivePrintScale\}px`/);
+  assert.match(page, /"--print-point-marker-size": `\$\{5 \/ effectivePrintScale\}px`/);
+  assert.match(page, /const printAnnotationBlockHeight =/);
+  assert.match(page, /const printAutomaticBaseY = point\.y > printSource\.y \+ printSource\.height/);
+  assert.match(page, /"--annotation-print-y": `\$\{\(printAutomaticBaseY \+ printAutomaticHeights\.slice/);
   assert.match(page, /"--annotation-print-left": `\$\{printPosition\.x\}px`/);
   assert.match(page, /"--annotation-print-top": `\$\{printPosition\.y\}px`/);
-  assert.match(styles, /\.water-label, \.contours span, \.vector-label, \.route-name-label, \.point-annotation-chip \{ font-size: var\(--print-map-text-size\) !important; \}/);
+  assert.match(styles, /\.water-label \{[^}]*font-size: var\(--print-secondary-text-size\) !important;/);
+  assert.match(styles, /\.contours span, \.vector-label, \.point-annotation-pointName, \.point-annotation-depth \{ font-size: var\(--print-secondary-text-size\) !important; \}/);
+  assert.match(styles, /\.route-name-label, \.feature-name-label-print, \.point-annotation-name \{ font-size: var\(--print-primary-text-size\) !important; \}/);
   assert.match(styles, /\.vector-label \{[^}]*padding:\s*var\(--print-map-label-padding-y\) var\(--print-map-label-padding-x\)/);
   assert.match(styles, /\.point-annotation-auto \{ transform: translate\(var\(--print-annotation-stack-x\), var\(--annotation-print-y\)\) !important; \}/);
   assert.match(styles, /\.point-annotation-manual \{ left: var\(--annotation-print-left\) !important; top: var\(--annotation-print-top\) !important; \}/);
-  assert.match(styles, /\.point-annotation-pointName, \.point-annotation-name, \.point-annotation-depth \{ font-size: var\(--print-map-text-size\) !important; \}/);
   assert.match(styles, /\.point-annotation-chip \{[^}]*background:\s*rgba\(200,239,238,\.72\)/);
   assert.match(styles, /\.vector-label \{[^}]*text-shadow:\s*none;/);
   assert.match(styles, /\.point-annotation-chip \{[^}]*box-shadow:\s*none;[^}]*text-shadow:\s*none;/);
   assert.match(styles, /\.point-annotation-manual \.point-annotation-chip \{[^}]*box-shadow:\s*none;/);
   assert.match(styles, /\.point-annotation:hover \.point-annotation-chip, \.point-annotation:focus-visible \.point-annotation-chip \{[^}]*outline-color:\s*var\(--coral\);[^}]*box-shadow:\s*none;/);
-  assert.match(styles, /@media print[\s\S]*\.point-annotation-chip \{[^}]*outline:\s*none !important;[^}]*box-shadow:\s*none !important;[^}]*text-shadow:\s*none !important;/);
+  assert.match(styles, /@media print[\s\S]*\.point-annotation-chip \{[^}]*outline:\s*var\(--print-map-label-border\) solid[^}]*box-shadow:\s*none !important;[^}]*text-shadow:\s*none !important;/);
 });
 
 test("exports descriptive names through deterministic smart callout rails", async () => {
@@ -476,10 +480,9 @@ test("exports descriptive names through deterministic smart callout rails", asyn
     readFile(new URL("../app/projects/scuba-map-maker/print-callouts.ts", import.meta.url), "utf8"),
   ]);
 
-  assert.match(page, /type NamePlacement = "smartCallouts" \| "asPositioned"/);
-  assert.match(page, /namePlacement\?: NamePlacement/);
-  assert.match(page, /namePlacement: "smartCallouts"/);
-  assert.match(page, /savedExportSettings\.namePlacement === "asPositioned" \? "asPositioned" : "smartCallouts"/);
+  assert.match(page, /type NamePlacement,/);
+  assert.match(page, /normalizeExportSettings\(project\.exportSettings\)/);
+  assert.match(page, /exportSettings\.namePlacement === "asPositioned" \? "asPositioned" : "smartCallouts"/);
   assert.match(page, /layoutPrintCallouts/);
   assert.match(page, /rightRailCandidate\.layout\.mode === "right"/);
   assert.match(page, /createSmartCalloutCandidate\(dualRailViewport\)/);
@@ -491,7 +494,7 @@ test("exports descriptive names through deterministic smart callout rails", asyn
   assert.match(page, />Smart callouts</);
   assert.match(page, />As positioned</);
   assert.match(page, /type="radio" name="pdf-name-placement" value="smartCallouts"/);
-  assert.match(page, /disabled=\{smartCalloutOverflowIds\.length > 0\}/);
+  assert.match(page, /disabled=\{smartCalloutOverflowIds\.length > 0 \|\| isPreparingPrint\}/);
   assert.match(page, /Reduce the print area or hide Names before exporting/);
 
   assert.match(calloutEngine, /mode: "none" \| "right" \| "both"/);
@@ -500,10 +503,10 @@ test("exports descriptive names through deterministic smart callout rails", asyn
   assert.match(calloutEngine, /const balanced = rebalance/);
 
   assert.match(styles, /\.print-map-viewport \{ display: contents; \}/);
-  assert.match(styles, /\.map-stage\.smart-callout-mode \{[^}]*overflow: hidden !important;[^}]*contain: paint;[^}]*isolation: isolate;[^}]*clip-path: inset\(0\);[^}]*break-inside: avoid;/);
-  assert.match(styles, /\.map-stage\.smart-callout-mode \.print-map-viewport \{[^}]*overflow: hidden;[^}]*contain: paint;[^}]*isolation: isolate;[^}]*clip-path: inset\(0\);/);
-  assert.match(styles, /\.smart-callout-leaders polyline \{[^}]*stroke-width: \.85px;[^}]*stroke-linecap: round;/);
-  assert.match(styles, /\.smart-callout-label \{[^}]*font-size: 10px;[^}]*box-shadow: none;[^}]*text-shadow: none;/);
+  assert.match(styles, /\.map-stage, \.map-stage\.has-print-area, \.map-stage\.smart-callout-mode \{[^}]*overflow: hidden !important;[^}]*contain: strict;[^}]*isolation: isolate;[^}]*clip-path: inset\(0\);/);
+  assert.match(styles, /\.print-map-viewport, \.map-stage\.smart-callout-mode \.print-map-viewport \{[^}]*overflow: hidden;[^}]*contain: strict;[^}]*isolation: isolate;[^}]*clip-path: inset\(0\);/);
+  assert.match(styles, /\.smart-callout-leaders polyline \{[^}]*stroke-width: 1\.15px;[^}]*stroke-linecap: round;/);
+  assert.match(styles, /\.smart-callout-label \{[^}]*font-size: 12px;[^}]*box-shadow: none;[^}]*text-shadow: none;/);
   assert.match(styles, /\.map-stage\.smart-callout-overflow \.smart-callout-overflow-print/);
 });
 
@@ -519,7 +522,7 @@ test("keeps every Soundings route surface and v2 control inside the Warren scope
 
   const scope = blockAt(styles, "@scope (.soundings-app)");
   const outsideScope = `${styles.slice(0, scope.start)}\n${styles.slice(scope.end)}`;
-  assert.match(outsideScope, /@page \{ size: landscape; margin: 9mm; \}/);
+  assert.match(outsideScope, /@page \{ size: Letter landscape; margin: 9mm; \}/);
   assert.doesNotMatch(outsideScope, /\.(?:route-draft-layer|route-draw-controls|route-vertex-handle)\b/);
   assert.doesNotMatch(scope.text, /(?:^|\n)\s*(?:html|body)(?:\s|,|\{)/);
   assert.match(scope.text, /:scope\.app-shell/);
@@ -531,7 +534,7 @@ test("keeps every Soundings route surface and v2 control inside the Warren scope
   assert.match(scope.text, /\.route-vertex-handle/);
   assert.match(scope.text, /\.route-editor-actions, \.route-topology-actions/);
   assert.match(scope.text, /\.route-draw-controls/);
-  assert.match(scope.text, /@media print[\s\S]*\.route-draft-layer, \.route-draw-controls, \.route-vertex-handle \{ display: none !important; \}/);
+  assert.match(scope.text, /@media print[\s\S]*\.route-draft-layer,[^}]*\.route-vertex-handle[^}]*\{ display: none !important; \}/);
   assert.match(scope.text, /\.layers-panel\.collapsed \.layers-heading > span \{ gap: 0; font-size: 0; \}/);
 });
 

@@ -40,12 +40,15 @@ function assertQuotedMember(source, member) {
 }
 
 test("wires geographic features into tools, survey tabs, screen layers, and PDF settings", async () => {
-  const page = await readFile(pageUrl, "utf8");
+  const [page, printExport] = await Promise.all([
+    readFile(pageUrl, "utf8"),
+    readFile(new URL("../app/projects/scuba-map-maker/print-export.ts", import.meta.url), "utf8"),
+  ]);
   const toolType = page.match(/type Tool = ([^;]+);/)?.[1] ?? "";
   const surveyTabType = page.match(/type SurveyTab = ([^;]+);/)?.[1] ?? "";
   const layerType = blockAt(page, "type LayerVisibility =");
-  const exportType = blockAt(page, "type ExportSettings =");
-  const defaultExportSettings = blockAt(page, "const DEFAULT_EXPORT_SETTINGS");
+  const exportType = blockAt(printExport, "export type ExportSettings =");
+  const defaultExportSettings = blockAt(printExport, "export const FULL_DETAIL_EXPORT_SETTINGS");
   const defaultVisibleLayers = blockAt(page, "useState<LayerVisibility>");
 
   assertQuotedMember(toolType, "feature");
@@ -106,7 +109,7 @@ test("keeps feature drafts outside persisted projects and commits each finished 
 test("renders geographic feature ink, labels, and a full-length independent hit path", async () => {
   const [page, styles] = await Promise.all([readFile(pageUrl, "utf8"), readFile(stylesUrl, "utf8")]);
 
-  assert.match(page, /<svg\b(?=[^>]*feature-layer)(?=[^>]*visibleLayers\.geographicFeatures)(?=[^>]*exportSettings\.geographicFeatures)[^>]*>/);
+  assert.match(page, /<svg\b(?=[^>]*feature-layer)(?=[^>]*visibleLayers\.geographicFeatures)(?=[^>]*printSettings\.geographicFeatures)[^>]*>/);
   assert.match(page, /<path\b(?=[^>]*\bfeature-path\b)(?=[^>]*d=\{[^}]+\})[^>]*\/>/);
 
   const hitPath = selfClosingElementAt(page, "feature-hit-path");
@@ -118,7 +121,7 @@ test("renders geographic feature ink, labels, and a full-length independent hit 
   assert.match(styles, /\.feature-hit-path\s*\{[^}]*stroke-width:\s*var\(--feature-hit-width[^}]*pointer-events:\s*stroke/s);
 
   assert.match(page, /<[^>]+(?=[^>]*feature(?:-name)?-label)(?=[^>]*visibleLayers\.geographicFeatureLabels)[^>]*>/);
-  assert.match(page, /<[^>]+(?=[^>]*feature(?:-name)?-label)(?=[^>]*exportSettings\.geographicFeatureLabels)[^>]*>/);
+  assert.match(page, /<[^>]+(?=[^>]*feature(?:-name)?-label)(?=[^>]*printSettings\.geographicFeatureLabels)[^>]*>/);
   assert.match(page, /setSurveyTab\("features"\)/);
   assert.match(page, /setSelectedFeatureId\(/);
   assert.doesNotMatch(hitPath, /route-symbol-clearance-mask|route-symbol-cutout/);

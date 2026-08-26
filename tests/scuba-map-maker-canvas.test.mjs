@@ -79,13 +79,11 @@ test("uses extended canvas bounds for pointer placement, print areas, features, 
   assert.match(page, /normalizePrintArea\([^\n;]*canvasSize\)/);
   assert.match(page, /translateGeographicFeature\([^\n;]*canvasSize\)/);
 
-  const fullCanvasPrintScale = page.match(/const fullCanvasPrintScale\s*=\s*([^;]+);/)?.[1] ?? "";
-  assert.ok(fullCanvasPrintScale, "full-canvas print scale should be derived");
-  assert.match(fullCanvasPrintScale, /canvasSize\.width/);
-  assert.match(fullCanvasPrintScale, /canvasSize\.height/);
-  assert.match(page, /const printCropScale\s*=\s*printArea\s*\?[^:;]+:\s*fullCanvasPrintScale/);
-  assert.match(page, /const printSource:\s*PrintRect\s*=\s*printArea\s*\?\?\s*\{\s*x:\s*0,\s*y:\s*0,\s*width:\s*canvasSize\.width,\s*height:\s*canvasSize\.height\s*\}/);
-  assert.match(page, /"--print-full-scale":\s*String\(fullCanvasPrintScale\)/);
+  assert.match(page, /const printSource:\s*PrintSource\s*=\s*printArea\s*\?\?\s*\{\s*x:\s*0,\s*y:\s*0,\s*width:\s*canvasSize\.width,\s*height:\s*canvasSize\.height\s*\}/);
+  assert.match(page, /const basePrintViewport\s*=\s*printViewportFor\("map"\)/);
+  assert.match(page, /createPrintProjection\(printSource, activePrintViewport\)/);
+  assert.match(page, /"--print-map-scale":\s*String\(effectivePrintScale\)/);
+  assert.doesNotMatch(page, /fullCanvasPrintScale|printCropScale|--print-full-scale/);
 });
 
 test("offers Select-only east, south, and southeast resize handles with keyboard increments", async () => {

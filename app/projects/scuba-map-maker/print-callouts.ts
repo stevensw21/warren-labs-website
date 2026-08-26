@@ -116,8 +116,9 @@ function estimatedTextWidth(text: string, characterWidth: number) {
 }
 
 /**
- * Estimates wrapping with a fixed character width. Names are kept intact and
- * receive at most two lines; a value that cannot fit is reported as overflow.
+ * Estimates wrapping with a fixed character width. Names prefer word breaks,
+ * may use up to three lines, and fall back to character breaks only when a
+ * single word cannot fit. A value that still cannot fit is reported as overflow.
  */
 function wrapText(text: string, textWidth: number, characterWidth: number): string[] | undefined {
   const normalized = text.trim().replace(/\s+/g, " ");
@@ -131,13 +132,31 @@ function wrapText(text: string, textWidth: number, characterWidth: number): stri
   }
   const characterBreaks = Array.from({ length: normalized.length - 1 }, (_, index) => index + 1);
 
-  for (const breaks of [wordBreaks, characterBreaks]) {
-    for (let index = breaks.length - 1; index >= 0; index -= 1) {
-      const split = breaks[index];
-      const first = normalized.slice(0, split).trimEnd();
-      const second = normalized.slice(split).trimStart();
-      if (first && second && fits(first) && fits(second)) return [first, second];
-    }
+  const wrapAt = (breaks: readonly number[], maximumLines: number) => {
+    const search = (start: number, linesRemaining: number): string[] | undefined => {
+      const remainder = normalized.slice(start).trim();
+      if (fits(remainder)) return [remainder];
+      if (linesRemaining <= 1) return undefined;
+      for (let index = breaks.length - 1; index >= 0; index -= 1) {
+        const split = breaks[index];
+        if (split <= start) continue;
+        const first = normalized.slice(start, split).trim();
+        if (!first || !fits(first)) continue;
+        const rest = search(split, linesRemaining - 1);
+        if (rest?.length) return [first, ...rest];
+      }
+      return undefined;
+    };
+    return search(0, maximumLines);
+  };
+
+  for (const maximumLines of [2, 3]) {
+    const wordWrapped = wrapAt(wordBreaks, maximumLines);
+    if (wordWrapped) return wordWrapped;
+  }
+  for (const maximumLines of [2, 3]) {
+    const characterWrapped = wrapAt(characterBreaks, maximumLines);
+    if (characterWrapped) return characterWrapped;
   }
 
   return undefined;

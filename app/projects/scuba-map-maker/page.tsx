@@ -23,6 +23,27 @@ import {
   type PointLabelOffsets,
 } from "./point-annotations";
 import { layoutPrintCallouts, type PrintRect } from "./print-callouts";
+import {
+  PRINT_CALLOUT_GAP,
+  PRINT_CALLOUT_RAIL_WIDTH,
+  PRINT_CHART_FRAME,
+  chooseScaleBar,
+  createPrintProjection,
+  printViewportFor,
+  type PrintSource,
+  type PrintViewport,
+} from "./print-layout";
+import {
+  CLEAN_CHART_EXPORT_SETTINGS,
+  FULL_DETAIL_EXPORT_SETTINGS,
+  buildRouteLegRows,
+  buildUsedSymbolLegend,
+  effectiveExportSettings,
+  normalizeExportSettings,
+  type ExportSettings,
+  type ExportToggleKey,
+  type NamePlacement,
+} from "./print-export";
 import { migrateLegacyWaypoints } from "./project-migration";
 import { collapseRouteVertex, deleteRouteSegment, deleteSavedRoute, insertRouteMidpoint, type RouteEditResult } from "./route-editing";
 import { planarizeRouteTopology } from "./route-topology";
@@ -60,9 +81,6 @@ type CoastPoint = { id: string; x: number; y: number };
 type PrintArea = { x: number; y: number; width: number; height: number };
 type ReferenceImage = { dataUrl?: string; opacity: number; scale: number; x: number; y: number; visible: boolean; locked: boolean; frame?: CanvasSize };
 type Calibration = { vectorId?: string; distance?: number; unit?: Unit; metersPerPixel: number };
-type NamePlacement = "smartCallouts" | "asPositioned";
-type ExportSettings = { reference: boolean; shoreline: boolean; geographicFeatures: boolean; geographicFeatureLabels: boolean; routes: boolean; routeLabels: boolean; routeNameLabels: boolean; pointMarkers: boolean; namedPointMarkersOnly: boolean; pointNames: boolean; fullPointNames: boolean; depths: boolean; contours: boolean; mapFurniture: boolean; pointTable: boolean; namePlacement?: NamePlacement };
-type ExportToggleKey = Exclude<keyof ExportSettings, "namePlacement">;
 type Project = {
   version: 2; id: string; title: string; date: string; notes: string; distanceUnit: Unit; depthUnit: Unit;
   coastline: CoastPoint[]; shoreLocked?: boolean; geographicFeatures: GeographicFeature[]; waypoints: Point[]; routeVertices: RouteVertex[]; vectors: Vector[]; routes?: SavedRoute[]; reference: ReferenceImage; calibration?: Calibration; exportSettings?: ExportSettings; printArea?: PrintArea; pointSymbolScale?: number; canvasSize?: CanvasSize;
@@ -90,25 +108,40 @@ const DB_NAME = "dive-map-builder";
 const STORE_NAME = "projects";
 const DESKTOP_TOOL_DOCK_QUERY = "(min-width: 1200px)";
 const TOOL_DOCK_INSET = 12;
-const PRINT_FRAME = { width: 1000, height: 500 };
-const PRINT_MAP_TEXT_SIZE = 10;
-const PRINT_CALLOUT_RAIL_WIDTH = 136;
-const PRINT_CALLOUT_RAIL_GAP = 12;
-const PRINT_CALLOUT_INSET = 16;
+const PRINT_PRIMARY_TEXT_SIZE = 12;
+const PRINT_SECONDARY_TEXT_SIZE = 11;
 const DEFAULT_METERS_PER_PIXEL = 0.5;
 const METERS_PER_UNIT: Record<Unit, number> = { ft: 0.3048, m: 1, mi: 1609.344 };
 const UNIT_LABEL: Record<Unit, string> = { ft: "feet", m: "meters", mi: "miles" };
 const POINT_ANNOTATION_LABELS: Record<PointAnnotationKind, string> = { pointName: "Point Name", name: "Name", depth: "Depth" };
 const GEOGRAPHIC_FEATURE_MODE_LABELS: Record<GeographicFeatureMode, string> = { freehand: "Freehand", spline: "Smooth spline", polyline: "Connected line" };
 const GEOGRAPHIC_FEATURE_DASH_LABELS: Record<GeographicFeatureDash, string> = { solid: "Solid", dashed: "Dashed", dotted: "Dotted" };
-const DEFAULT_EXPORT_SETTINGS: ExportSettings = { reference: true, shoreline: true, geographicFeatures: true, geographicFeatureLabels: true, routes: true, routeLabels: true, routeNameLabels: true, pointMarkers: true, namedPointMarkersOnly: false, pointNames: true, fullPointNames: true, depths: true, contours: true, mapFurniture: true, pointTable: true, namePlacement: "smartCallouts" };
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value));
 const id = () => (typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`);
 const round = (value: number, precision = 2) => Math.round(value * 10 ** precision) / 10 ** precision;
 const formatNumber = (value: number) => new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(value);
+const formatProjectDate = (value: string) => {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return value || "Undated";
+  return new Intl.DateTimeFormat("en-US", { month: "long", day: "numeric", year: "numeric", timeZone: "UTC" }).format(new Date(`${value}T00:00:00Z`));
+};
+const printDocumentTitle = (title: string) => `${title.trim() || "Soundings dive map"} — Soundings`;
+async function waitForPrintImages(root: ParentNode) {
+  const images = Array.from(root.querySelectorAll("img"));
+  await Promise.all(images.map(async (image) => {
+    if (image.complete) {
+      if (image.naturalWidth > 0 && typeof image.decode === "function") await image.decode().catch(() => undefined);
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      image.addEventListener("load", () => resolve(), { once: true });
+      image.addEventListener("error", () => resolve(), { once: true });
+    });
+  }));
+}
 const emptyProject = (title = "Untitled dive site"): Project => ({
   version: 2, id: id(), title, date: new Date().toISOString().slice(0, 10), notes: "", distanceUnit: "ft", depthUnit: "ft",
-  coastline: [], shoreLocked: false, geographicFeatures: [], waypoints: [], routeVertices: [], vectors: [], routes: [], calibration: { metersPerPixel: DEFAULT_METERS_PER_PIXEL }, exportSettings: { ...DEFAULT_EXPORT_SETTINGS },
+  coastline: [], shoreLocked: false, geographicFeatures: [], waypoints: [], routeVertices: [], vectors: [], routes: [], calibration: { metersPerPixel: DEFAULT_METERS_PER_PIXEL }, exportSettings: { ...CLEAN_CHART_EXPORT_SETTINGS },
   pointSymbolScale: DEFAULT_POINT_SYMBOL_SCALE,
   canvasSize: { ...DEFAULT_CANVAS_SIZE },
   reference: { opacity: 0.48, scale: 1, x: 0, y: 0, visible: true, locked: false, frame: { ...DEFAULT_CANVAS_SIZE } },
@@ -153,20 +186,6 @@ function projectedPointOnSegment(point: { x: number; y: number }, start: { x: nu
   const x = start.x + dx * t;
   const y = start.y + dy * t;
   return { x, y, t, distance: Math.hypot(point.x - x, point.y - y) };
-}
-function projectPrintSource(source: PrintRect, viewport: PrintRect) {
-  const scale = Math.min(viewport.width / source.width, viewport.height / source.height);
-  const renderedWidth = source.width * scale;
-  const renderedHeight = source.height * scale;
-  const originX = viewport.x + (viewport.width - renderedWidth) / 2;
-  const originY = viewport.y + (viewport.height - renderedHeight) / 2;
-  return {
-    scale,
-    originX,
-    originY,
-    canvasOffsetX: originX - viewport.x - source.x * scale,
-    canvasOffsetY: originY - viewport.y - source.y * scale,
-  };
 }
 function mapScale(project: Project) { return project.calibration?.metersPerPixel && project.calibration.metersPerPixel > 0 ? project.calibration.metersPerPixel : DEFAULT_METERS_PER_PIXEL; }
 function geometry(project: Project, vector: Vector) {
@@ -295,29 +314,12 @@ function normalizeProject(raw: StoredProject | Project): Project {
   project.vectors = storedVectors.map((vector) => ({ ...vector, unit: METERS_PER_UNIT[vector.unit] ? vector.unit : project.distanceUnit }));
   project.routes = normalizeRoutes(routeNodes(project), project.vectors, Array.isArray(project.routes) ? project.routes : [], { createId: id });
   project.shoreLocked = project.shoreLocked ?? false;
-  const savedExportSettings = project.exportSettings ?? DEFAULT_EXPORT_SETTINGS;
-  const namePlacement: NamePlacement = savedExportSettings.namePlacement === "asPositioned" ? "asPositioned" : "smartCallouts";
-  const routeNameLabels = savedExportSettings.routeNameLabels ?? savedExportSettings.routeLabels ?? DEFAULT_EXPORT_SETTINGS.routeNameLabels;
-  project.exportSettings = { ...DEFAULT_EXPORT_SETTINGS, ...savedExportSettings, routeNameLabels, namePlacement };
+  project.exportSettings = normalizeExportSettings(stored.exportSettings);
   project.printArea = normalizePrintArea(project.printArea, project.canvasSize);
   project.calibration = { ...project.calibration, metersPerPixel: mapScale(project) };
   project.pointSymbolScale = normalizePointSymbolScale(project.pointSymbolScale);
   return reconcileRouteTopology(project);
 }
-function niceDistance(value: number) {
-  if (!Number.isFinite(value) || value <= 0) return 1;
-  const exponent = 10 ** Math.floor(Math.log10(value));
-  const fraction = value / exponent;
-  const nice = fraction >= 5 ? 5 : fraction >= 2 ? 2 : 1;
-  return nice * exponent;
-}
-function scaleBar(project: Project) {
-  const unit = project.distanceUnit;
-  const targetUnits = (100 * mapScale(project)) / METERS_PER_UNIT[unit];
-  const value = niceDistance(targetUnits);
-  return { value, pixels: Math.max(25, (value * METERS_PER_UNIT[unit]) / mapScale(project)) };
-}
-
 function openDatabase(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, 1);
@@ -439,6 +441,7 @@ export default function ScubaMapMaker() {
   const [captureConflictIds, setCaptureConflictIds] = useState<Set<string>>(() => new Set());
   const [layersOpen, setLayersOpen] = useState(false);
   const [saveState, setSaveState] = useState("Saved locally");
+  const [isPreparingPrint, setIsPreparingPrint] = useState(false);
   const [dockPosition, setDockPosition] = useState<DockPosition | null>(null);
   const [dockDragging, setDockDragging] = useState(false);
   const [canvasResizeActive, setCanvasResizeActive] = useState(false);
@@ -1559,8 +1562,12 @@ export default function ScubaMapMaker() {
     const reader = new FileReader(); reader.onload = () => mutate((current) => { current.reference.frame = current.reference.dataUrl && current.reference.frame ? current.reference.frame : { ...normalizeCanvasSize(current.canvasSize) }; current.reference.dataUrl = String(reader.result); current.reference.visible = true; return current; }); reader.readAsDataURL(file); event.target.value = "";
   };
   const changeDistanceUnit = (unit: Unit) => mutate((current) => { current.distanceUnit = unit; return synchronizeVectors(current); }, false);
-  const setExportSetting = (setting: ExportToggleKey, value: boolean) => mutate((current) => { current.exportSettings = { ...DEFAULT_EXPORT_SETTINGS, ...current.exportSettings, [setting]: value }; return current; }, false);
-  const setNamePlacement = (namePlacement: NamePlacement) => mutate((current) => { current.exportSettings = { ...DEFAULT_EXPORT_SETTINGS, ...current.exportSettings, namePlacement }; return current; }, false);
+  const setExportSetting = (setting: ExportToggleKey, value: boolean) => mutate((current) => { current.exportSettings = { ...normalizeExportSettings(current.exportSettings), [setting]: value }; return current; }, false);
+  const setNamePlacement = (namePlacement: NamePlacement) => mutate((current) => { current.exportSettings = { ...normalizeExportSettings(current.exportSettings), namePlacement }; return current; }, false);
+  const applyExportPreset = (preset: "clean" | "full") => mutate((current) => {
+    current.exportSettings = { ...(preset === "clean" ? CLEAN_CHART_EXPORT_SETTINGS : FULL_DETAIL_EXPORT_SETTINGS) };
+    return current;
+  }, false);
   const openProject = (next: Project) => { projectRef.current = next; setProject(next); autoFitRef.current = true; window.requestAnimationFrame(fitMapToStage); };
   const newProject = () => { const next = emptyProject("New dive site"); openProject(next); setProjects((items) => [next, ...items]); setSelectedId(null); setSelectedVectorId(null); setSelectedRouteId(null); setSelectedRouteVertexId(null); setSelectedFeatureId(null); setRouteDraft(null); replaceFeatureDraft(null); setFeatureDraftPointer(null); setFeatureModePickerOpen(false); setUndoStack([]); setRedoStack([]); void persistProject(next); setNotice("New project created locally."); };
   const duplicateProject = () => { if (!project) return; const next = clone(project); next.id = id(); next.title = `${project.title} copy`; openProject(next); setProjects((items) => [next, ...items]); void persistProject(next); setNotice("Project duplicated locally."); };
@@ -1633,33 +1640,26 @@ export default function ScubaMapMaker() {
   if (!project) return <main className="soundings-app loading"><div className="loading-mark">⌁</div><p>Opening your dive-map workbench…</p></main>;
 
   const coast = project.coastline;
-  const exportSettings = project.exportSettings ?? DEFAULT_EXPORT_SETTINGS;
+  const exportSettings = normalizeExportSettings(project.exportSettings);
+  const printSettings = effectiveExportSettings(exportSettings);
   const namePlacement: NamePlacement = exportSettings.namePlacement === "asPositioned" ? "asPositioned" : "smartCallouts";
   const printArea = project.printArea;
   const printPoints = project.waypoints.filter((point) => pointInPrintArea(point, printArea));
-  const fullCanvasPrintScale = Math.min(0.72, 1000 / canvasSize.width, 576 / canvasSize.height);
-  const printCropScale = printArea ? Math.min(PRINT_FRAME.width / printArea.width, PRINT_FRAME.height / printArea.height) : fullCanvasPrintScale;
-  const printSource: PrintRect = printArea ?? { x: 0, y: 0, width: canvasSize.width, height: canvasSize.height };
-  const smartNamePoints = exportSettings.fullPointNames ? printPoints.filter(hasDescriptiveName) : [];
+  const printPointTableChunks = printPoints.length > 20
+    ? Array.from({ length: Math.ceil(printPoints.length / 20) }, (_, index) => printPoints.slice(index * 20, index * 20 + 20))
+    : [printPoints];
+  const printSource: PrintSource = printArea ?? { x: 0, y: 0, width: canvasSize.width, height: canvasSize.height };
+  const smartNamePoints = printSettings.fullPointNames ? printPoints.filter(hasDescriptiveName) : [];
   const smartCalloutsRequested = namePlacement === "smartCallouts" && smartNamePoints.length > 0;
-  const printFrame: PrintRect = { x: 0, y: 0, width: PRINT_FRAME.width, height: PRINT_FRAME.height };
-  const rightRailViewport: PrintRect = {
-    x: PRINT_CALLOUT_INSET,
-    y: PRINT_CALLOUT_INSET,
-    width: PRINT_FRAME.width - PRINT_CALLOUT_INSET * 2 - PRINT_CALLOUT_RAIL_WIDTH - PRINT_CALLOUT_RAIL_GAP,
-    height: PRINT_FRAME.height - PRINT_CALLOUT_INSET * 2,
-  };
-  const dualRailViewport: PrintRect = {
-    x: PRINT_CALLOUT_RAIL_WIDTH + PRINT_CALLOUT_RAIL_GAP,
-    y: PRINT_CALLOUT_INSET,
-    width: PRINT_FRAME.width - (PRINT_CALLOUT_RAIL_WIDTH + PRINT_CALLOUT_RAIL_GAP) * 2,
-    height: PRINT_FRAME.height - PRINT_CALLOUT_INSET * 2,
-  };
-  const createSmartCalloutCandidate = (viewport: PrintRect) => {
-    const projection = projectPrintSource(printSource, viewport);
+  const printFrame: PrintRect = PRINT_CHART_FRAME;
+  const basePrintViewport = printViewportFor("map");
+  const rightRailViewport = printViewportFor("rightRail");
+  const dualRailViewport = printViewportFor("dualRail");
+  const createSmartCalloutCandidate = (viewport: PrintViewport) => {
+    const projection = createPrintProjection(printSource, viewport);
     const points = smartNamePoints.map((point) => ({
       id: point.id,
-      text: exportSettings.pointNames ? `${point.label} · ${point.name!.trim()}` : point.name!.trim(),
+      text: printSettings.pointNames ? `${point.label} · ${point.name!.trim()}` : point.name!.trim(),
       x: projection.originX + (point.x - printSource.x) * projection.scale,
       y: projection.originY + (point.y - printSource.y) * projection.scale,
     }));
@@ -1668,7 +1668,14 @@ export default function ScubaMapMaker() {
       mapViewport: viewport,
       railWidth: PRINT_CALLOUT_RAIL_WIDTH,
       points,
-      metrics: { railGap: PRINT_CALLOUT_RAIL_GAP, fontSize: PRINT_MAP_TEXT_SIZE },
+      metrics: {
+        railGap: PRINT_CALLOUT_GAP,
+        fontSize: PRINT_PRIMARY_TEXT_SIZE,
+        characterWidth: 7.3,
+        lineHeight: 14,
+        paddingX: 5,
+        paddingY: 4,
+      },
     });
     return { viewport, projection, layout };
   };
@@ -1681,11 +1688,24 @@ export default function ScubaMapMaker() {
   const smartCalloutsActive = Boolean(smartCalloutCandidate);
   const smartCalloutOverflowIds = smartCalloutCandidate?.layout.overflowIds ?? [];
   const smartCalloutPointIds = new Set(smartNamePoints.map((point) => point.id));
-  const effectivePrintScale = smartCalloutCandidate?.projection.scale ?? printCropScale;
+  const activePrintViewport = smartCalloutCandidate?.viewport ?? basePrintViewport;
+  const printProjection = smartCalloutCandidate?.projection ?? createPrintProjection(printSource, activePrintViewport);
+  const effectivePrintScale = printProjection.scale;
+  function clampPrintLabelAnchor<T extends { x: number; y: number }>(anchor: T, horizontalPixels = 84, verticalPixels = 24): T {
+    const insetX = Math.min(printSource.width / 2, horizontalPixels / effectivePrintScale);
+    const insetY = Math.min(printSource.height / 2, verticalPixels / effectivePrintScale);
+    return {
+      ...anchor,
+      x: Math.min(printSource.x + printSource.width - insetX, Math.max(printSource.x + insetX, anchor.x)),
+      y: Math.min(printSource.y + printSource.height - insetY, Math.max(printSource.y + insetY, anchor.y)),
+    };
+  }
   const pointSymbolScale = normalizePointSymbolScale(project.pointSymbolScale);
   const smartCalloutSymbolSize = { width: 24 * pointSymbolScale, height: 18 * pointSymbolScale };
+  const printBar = chooseScaleBar(mapScale(project), METERS_PER_UNIT[project.distanceUnit], effectivePrintScale);
   const printMapDisplayStyle = {
-    "--print-map-text-size": `${PRINT_MAP_TEXT_SIZE / effectivePrintScale}px`,
+    "--print-primary-text-size": `${PRINT_PRIMARY_TEXT_SIZE / effectivePrintScale}px`,
+    "--print-secondary-text-size": `${PRINT_SECONDARY_TEXT_SIZE / effectivePrintScale}px`,
     "--print-map-label-gap": `${1 / effectivePrintScale}px`,
     "--print-map-label-padding-x": `${4 / effectivePrintScale}px`,
     "--print-map-label-padding-y": `${2 / effectivePrintScale}px`,
@@ -1696,37 +1716,54 @@ export default function ScubaMapMaker() {
     "--print-annotation-padding-x": `${2 / effectivePrintScale}px`,
     "--print-annotation-padding-y": `${1 / effectivePrintScale}px`,
     "--print-annotation-radius": `${2 / effectivePrintScale}px`,
-    "--print-point-marker-size": `${4 / effectivePrintScale}px`,
+    "--print-annotation-max-width": `${150 / effectivePrintScale}px`,
+    "--print-point-marker-size": `${5 / effectivePrintScale}px`,
     "--print-point-symbol-size": `${24 * pointSymbolScale / effectivePrintScale}px`,
+    "--print-contour-width": `${1.25 / effectivePrintScale}px`,
+    "--print-water-label-left": `${printSource.x + 12 / effectivePrintScale}px`,
+    "--print-water-label-top": `${printSource.y + 14 / effectivePrintScale}px`,
+    "--print-water-label-width": `${Math.max(180, activePrintViewport.width - 78) / effectivePrintScale}px`,
   } as CSSProperties;
-  const printCropStyle = printArea ? {
-    "--print-crop-scale": String(printCropScale),
-    "--print-offset-x": `${(PRINT_FRAME.width - printArea.width * printCropScale) / 2 - printArea.x * printCropScale}px`,
-    "--print-offset-y": `${(PRINT_FRAME.height - printArea.height * printCropScale) / 2 - printArea.y * printCropScale}px`,
-    "--print-scale-bar": `${scaleBar(project).pixels * printCropScale}px`,
-  } as CSSProperties : undefined;
-  const smartPrintStyle = smartCalloutCandidate ? {
-    "--smart-map-left": `${smartCalloutCandidate.viewport.x}px`,
-    "--smart-map-top": `${smartCalloutCandidate.viewport.y}px`,
-    "--smart-map-width": `${smartCalloutCandidate.viewport.width}px`,
-    "--smart-map-height": `${smartCalloutCandidate.viewport.height}px`,
-    "--smart-map-right": `${PRINT_FRAME.width - smartCalloutCandidate.viewport.x - smartCalloutCandidate.viewport.width}px`,
-    "--smart-map-bottom": `${PRINT_FRAME.height - smartCalloutCandidate.viewport.y - smartCalloutCandidate.viewport.height}px`,
-    "--smart-canvas-offset-x": `${smartCalloutCandidate.projection.canvasOffsetX}px`,
-    "--smart-canvas-offset-y": `${smartCalloutCandidate.projection.canvasOffsetY}px`,
-    "--smart-map-scale": String(smartCalloutCandidate.projection.scale),
-    "--smart-scale-bar": `${scaleBar(project).pixels * smartCalloutCandidate.projection.scale}px`,
-  } as CSSProperties : undefined;
-  const printStageStyle = { "--print-full-scale": String(fullCanvasPrintScale), ...printCropStyle, ...smartPrintStyle } as CSSProperties;
+  const printStageStyle = {
+    "--print-map-left": `${activePrintViewport.x}px`,
+    "--print-map-top": `${activePrintViewport.y}px`,
+    "--print-map-width": `${activePrintViewport.width}px`,
+    "--print-map-height": `${activePrintViewport.height}px`,
+    "--print-map-right": `${PRINT_CHART_FRAME.width - activePrintViewport.x - activePrintViewport.width}px`,
+    "--print-map-bottom": `${PRINT_CHART_FRAME.height - activePrintViewport.y - activePrintViewport.height}px`,
+    "--print-canvas-offset-x": `${printProjection.canvasOffsetX}px`,
+    "--print-canvas-offset-y": `${printProjection.canvasOffsetY}px`,
+    "--print-map-scale": String(effectivePrintScale),
+    "--print-scale-bar": `${printBar.printedPixels}px`,
+  } as CSSProperties;
+  const prepareAndPrint = async () => {
+    if (smartCalloutOverflowIds.length || isPreparingPrint) return;
+    const previousTitle = document.title;
+    setIsPreparingPrint(true);
+    document.title = printDocumentTitle(project.title);
+    try {
+      if (document.fonts?.ready) await document.fonts.ready;
+      await waitForPrintImages(document.querySelector(".workspace") ?? document);
+      await new Promise<void>((resolve) => window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve())));
+      window.print();
+    } finally {
+      document.title = previousTitle;
+      setIsPreparingPrint(false);
+    }
+  };
   const exportClass = (visible: boolean) => visible ? "" : " export-hidden";
   const annotationText = (point: Point, annotationKind: PointAnnotationKind) => {
     if (annotationKind === "pointName") return point.label;
     if (annotationKind === "name") return point.name?.trim() ?? "";
     return point.depth === undefined ? "" : `${formatNumber(point.depth)} ${project.depthUnit}`;
   };
+  const printAnnotationBlockHeight = (annotationKind: PointAnnotationKind, text: string) => {
+    const lines = annotationKind === "name" ? Math.max(1, Math.ceil(text.length / 20)) : 1;
+    return lines * 14 + 3;
+  };
   const annotationScreenVisible = (annotationKind: PointAnnotationKind) => annotationKind === "pointName" ? visibleLayers.pointNames : annotationKind === "name" ? visibleLayers.names : visibleLayers.depths;
   const annotationPrintVisible = (point: Point, annotationKind: PointAnnotationKind) => {
-    const enabled = annotationKind === "pointName" ? exportSettings.pointNames : annotationKind === "name" ? exportSettings.fullPointNames : exportSettings.depths;
+    const enabled = annotationKind === "pointName" ? printSettings.pointNames : annotationKind === "name" ? printSettings.fullPointNames : printSettings.depths;
     if (!enabled || !pointInPrintArea(point, printArea)) return false;
     return !(smartCalloutsActive && smartCalloutPointIds.has(point.id) && (annotationKind === "pointName" || annotationKind === "name"));
   };
@@ -1737,7 +1774,7 @@ export default function ScubaMapMaker() {
     return offset && text ? [{ point, annotationKind, offset, text }] : [];
   }));
   const routeSymbolPoints = project.waypoints.filter((point) => point.symbol);
-  const renderAnnotationChip = (annotationKind: PointAnnotationKind, text: string) => <span className={`point-annotation-chip point-annotation-${annotationKind}${annotationKind === "name" && !visibleLayers.pointNames ? " screen-primary-name" : ""}${annotationKind === "name" && !exportSettings.pointNames ? " print-primary-name" : ""}`}>{text}</span>;
+  const renderAnnotationChip = (annotationKind: PointAnnotationKind, text: string) => <span className={`point-annotation-chip point-annotation-${annotationKind}${annotationKind === "name" && !visibleLayers.pointNames ? " screen-primary-name" : ""}${annotationKind === "name" && !printSettings.pointNames ? " print-primary-name" : ""}`}>{text}</span>;
   const routeMembershipsForPoint = (pointId: string) => routes.flatMap((route) => {
     const routeNodeIds = routePointIds(route, project.vectors);
     const pointIds = routeNodeIds.filter((nodeId) => pointMap.has(nodeId));
@@ -1773,6 +1810,14 @@ export default function ScubaMapMaker() {
     const anchor = name ? geographicFeatureLabelAnchor(feature) : undefined;
     return anchor ? [{ feature, name, anchor }] : [];
   });
+  const printFeatureLabelBelow = (anchor: NonNullable<ReturnType<typeof geographicFeatureLabelAnchor>>, index: number) => index % 2 === 0
+    || anchor.y > printSource.y + printSource.height - 80 / effectivePrintScale;
+  const appendixNodeLabels = new Map<string, string>([
+    ...project.waypoints.map((point) => [point.id, point.label] as [string, string]),
+    ...project.routeVertices.map((vertex, index) => [vertex.id, `Route vertex ${index + 1}`] as [string, string]),
+  ]);
+  const routeLegRows = buildRouteLegRows(routes, project.vectors, appendixNodeLabels);
+  const usedSymbolLegend = printSettings.pointMarkers ? buildUsedSymbolLegend(printPoints) : [];
   const routeEditor = (openDrawerForSegment: boolean) => <div className="route-editor">
     <div className="survey-route-list" aria-label="Routes">
       {routes.map((route, index) => {
@@ -1809,10 +1854,10 @@ export default function ScubaMapMaker() {
       </ol>
     </> : <p className="drawer-copy">Select a segment on the map or choose a route to name and order it.</p>}
   </div>;
-  const mapBar = scaleBar(project);
+  const mapBar = chooseScaleBar(mapScale(project), METERS_PER_UNIT[project.distanceUnit], 1);
   const selectedRouteLine = selectedVector ? geometry(project, selectedVector) : null;
   const shorelinePath = coast.length > 1 ? `${coast.map((vertex, index) => `${index ? "L" : "M"}${vertex.x} ${vertex.y}`).join(" ")}${coast.length > 2 ? " Z" : ""}` : "";
-  const shoreStrokeStyle = { "--shore-base-width": `${12 / zoom}px`, "--shore-edge-width": `${2 / zoom}px` } as CSSProperties;
+  const shoreStrokeStyle = { "--shore-base-width": `${12 / zoom}px`, "--shore-edge-width": `${2 / zoom}px`, "--print-shore-base-width": `${6 / effectivePrintScale}px`, "--print-shore-edge-width": `${1.5 / effectivePrintScale}px` } as CSSProperties;
   const shorelineHandleStyle = { "--coast-hit-size": `${44 / zoom}px`, "--coast-visual-size": `${Math.min(28, Math.max(10, 18 * zoom)) / zoom}px`, "--coast-border-width": `${Math.min(3, Math.max(1, 2 * zoom)) / zoom}px` } as CSSProperties;
   const referenceFrame = normalizeCanvasSize(project.reference.frame ?? canvasSize);
   const canvasDisplayStyle = {
@@ -1855,7 +1900,7 @@ export default function ScubaMapMaker() {
     "--feature-name-border": `${1 / zoom}px`,
     "--feature-name-radius": `${3 / zoom}px`,
     "--print-feature-name-width": `${150 / effectivePrintScale}px`,
-    "--print-feature-name-offset": `${4 / effectivePrintScale}px`,
+    "--print-feature-name-offset": `${10 / effectivePrintScale}px`,
   }) as CSSProperties;
   const routeNetworkStyle = { "--route-width": `${2 / zoom}px`, "--route-selected-width": `${3 / zoom}px`, "--route-selected-path-width": `${5 / zoom}px`, "--route-chevron-width": `${2 / zoom}px`, "--route-branch-radius": `${1 / zoom}px`, "--route-symbol-cutout-radius": `${30 * pointSymbolScale / zoom}px`, "--print-route-width": `${2 / effectivePrintScale}px`, "--print-route-branch-radius": `${1 / effectivePrintScale}px`, "--print-route-symbol-cutout-radius": `${20 * pointSymbolScale / effectivePrintScale}px` } as CSSProperties;
   const selectedDirectionPath = selectedRouteLine ? directionChevronPath(selectedRouteLine, zoom) : "";
@@ -1871,7 +1916,7 @@ export default function ScubaMapMaker() {
   const waypointDisplayStyle = { "--point-hit-size": `${44 / zoom}px`, "--point-dot-size": `${14 / zoom}px`, "--point-dot-border": `${2 / zoom}px`, "--point-ring": `${1 / zoom}px`, "--point-origin-ring": `${2 / zoom}px`, "--point-selected-ring": `${3 / zoom}px`, "--point-shadow": `${1 / zoom}px`, "--point-shadow-blur": `${4 / zoom}px`, "--point-symbol-size": `${38 * pointSymbolScale / zoom}px`, "--junction-size": `${10 / zoom}px`, "--junction-border": `${2 / zoom}px`, "--junction-halo": `${4 / zoom}px` } as CSSProperties;
   const toolDockStyle = dockPosition ? { "--tool-dock-left": `${dockPosition.left}px`, "--tool-dock-top": `${dockPosition.top}px` } as CSSProperties : undefined;
   const printAreaDisplayStyle = { "--print-area-stroke": `${2 / zoom}px`, "--print-area-dash": `${8 / zoom}px`, "--print-area-dash-gap": `${6 / zoom}px`, "--print-area-label-top": `${-2 / zoom}px`, "--print-area-label-padding-y": `${4 / zoom}px`, "--print-area-label-padding-x": `${7 / zoom}px`, "--print-area-label-font": `${10 / zoom}px`, "--print-area-handle-size": `${14 / zoom}px`, "--print-area-handle-offset": `${-8 / zoom}px`, "--print-area-focus-width": `${2 / zoom}px`, "--print-area-focus-offset": `${2 / zoom}px` } as CSSProperties;
-  const annotationDisplayStyle = { "--annotation-hit-width": `${44 / zoom}px`, "--annotation-hit-height": `${18 / zoom}px`, "--annotation-touch-hit": `${44 / zoom}px`, "--annotation-manual-hit": `${44 / zoom}px`, "--annotation-stack-x": `${28 / zoom}px`, "--annotation-padding-x": `${3 / zoom}px`, "--annotation-padding-y": `${1 / zoom}px`, "--annotation-radius": `${3 / zoom}px`, "--annotation-label-size": `${13 / zoom}px`, "--annotation-detail-size": `${10 / zoom}px`, "--annotation-focus-width": `${1.5 / zoom}px`, "--point-leader-width": `${1 / zoom}px`, "--print-point-leader-width": `${1 / effectivePrintScale}px` } as CSSProperties;
+  const annotationDisplayStyle = { "--annotation-hit-width": `${44 / zoom}px`, "--annotation-hit-height": `${18 / zoom}px`, "--annotation-touch-hit": `${44 / zoom}px`, "--annotation-manual-hit": `${44 / zoom}px`, "--annotation-stack-x": `${28 / zoom}px`, "--annotation-padding-x": `${3 / zoom}px`, "--annotation-padding-y": `${1 / zoom}px`, "--annotation-radius": `${3 / zoom}px`, "--annotation-label-size": `${13 / zoom}px`, "--annotation-detail-size": `${10 / zoom}px`, "--annotation-focus-width": `${1.5 / zoom}px`, "--point-leader-width": `${1 / zoom}px`, "--print-point-leader-width": `${1.15 / effectivePrintScale}px` } as CSSProperties;
   const pointLedger = (
     <section className="point-ledger">
       <div className="point-ledger-heading">
@@ -1957,10 +2002,15 @@ export default function ScubaMapMaker() {
           <div className="top-actions"><button onClick={undo} disabled={!undoStack.length}><SoundingsIcon name="undo"/>Undo</button><button onClick={redo} disabled={!redoStack.length}><SoundingsIcon name="redo"/>Redo</button><button className="export-button" onClick={() => setActivePanel("export")}><SoundingsIcon name="export"/>Export</button></div>
         </header>
 
+        <section className="print-map-sheet">
+          <div className="print-sheet-header">
+            <div><span>Soundings dive chart</span><h1>{project.title}</h1></div>
+            <time dateTime={project.date}>{formatProjectDate(project.date)}</time>
+          </div>
         <div className={`map-stage ${tool === "select" ? "pan-ready" : ""}${tool === "route" ? " route-draw-active" : ""}${tool === "feature" ? " feature-draw-active" : ""}${printArea ? " has-print-area" : ""}${smartCalloutsActive ? " smart-callout-mode" : ""}${smartCalloutOverflowIds.length ? " smart-callout-overflow" : ""}`} style={printStageStyle} ref={stageRef} tabIndex={0} aria-label="Map navigation surface. Drag blank map space to pan; scroll to zoom; use arrow keys to move around." onPointerDown={onStagePointerDown} onPointerMove={onStagePointerMove} onPointerUp={onStagePointerUp} onPointerCancel={onStagePointerUp} onWheel={onStageWheel}>
           <div className="print-map-viewport">
             <div className="map-canvas" style={{ ...printMapDisplayStyle, ...canvasDisplayStyle, transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}>
-            <div className="water-label">BEAVER LAKE · DIVE SITE CHART</div>
+            <div className="water-label">{project.title.trim().toUpperCase()}</div>
             {tool === "select" && <div className="canvas-resize-controls print-hidden" aria-label="Canvas extension controls">
               <button className="canvas-resize-handle east" aria-label="Extend canvas right edge" onPointerDown={(event) => startCanvasResize(event, "east")} onKeyDown={(event) => resizeCanvasWithKeyboard(event, "east")}/>
               <button className="canvas-resize-handle south" aria-label="Extend canvas bottom edge" onPointerDown={(event) => startCanvasResize(event, "south")} onKeyDown={(event) => resizeCanvasWithKeyboard(event, "south")}/>
@@ -1971,11 +2021,11 @@ export default function ScubaMapMaker() {
             {project.reference.dataUrl && <>
               {/* User-supplied data URLs must remain local and cannot use an image optimizer. */}
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img className={`reference-image${project.reference.visible ? "" : " screen-hidden"}${exportClass(exportSettings.reference)}`} src={project.reference.dataUrl} alt="Uploaded trace reference" style={{ width: referenceFrame.width, height: referenceFrame.height, opacity: project.reference.opacity, transform: `translate(${project.reference.x}px, ${project.reference.y}px) scale(${project.reference.scale})` }} draggable={false}/>
+              <img className={`reference-image${project.reference.visible ? "" : " screen-hidden"}${exportClass(printSettings.reference)}`} src={project.reference.dataUrl} alt="Uploaded trace reference" style={{ width: referenceFrame.width, height: referenceFrame.height, opacity: project.reference.opacity, transform: `translate(${project.reference.x}px, ${project.reference.y}px) scale(${project.reference.scale})`, "--print-reference-opacity": String(Math.min(project.reference.opacity, 0.35)) } as CSSProperties} draggable={false}/>
             </>}
-            {shorelinePath && <svg className={`shoreline-path${visibleLayers.shoreline ? "" : " screen-hidden"}${exportClass(exportSettings.shoreline)}`} style={shoreStrokeStyle} viewBox={`0 0 ${canvasSize.width} ${canvasSize.height}`} aria-hidden="true"><path className="shoreline-base" d={shorelinePath}/><path className="shoreline-edge" d={shorelinePath}/></svg>}
+            {shorelinePath && <svg className={`shoreline-path${visibleLayers.shoreline ? "" : " screen-hidden"}${exportClass(printSettings.shoreline)}`} style={shoreStrokeStyle} viewBox={`0 0 ${canvasSize.width} ${canvasSize.height}`} aria-hidden="true"><path className="shoreline-base" d={shorelinePath}/><path className="shoreline-edge" d={shorelinePath}/></svg>}
             {tool === "coast" && !project.shoreLocked && visibleLayers.shoreline && coast.map((vertex) => <button key={vertex.id} aria-label="Move shoreline vertex" className="coast-vertex" style={{ ...shorelineHandleStyle, left: vertex.x, top: vertex.y }} onPointerDown={(event) => startDrag(event, "coast", vertex.id)} />)}
-            {project.geographicFeatures.length > 0 && <svg className={`feature-layer${visibleLayers.geographicFeatures ? "" : " screen-hidden"}${exportClass(exportSettings.geographicFeatures)}`} style={featureLayerStyle} viewBox={`0 0 ${canvasSize.width} ${canvasSize.height}`} aria-label="Geographic map features">
+            {project.geographicFeatures.length > 0 && <svg className={`feature-layer${visibleLayers.geographicFeatures ? "" : " screen-hidden"}${exportClass(printSettings.geographicFeatures)}`} style={featureLayerStyle} viewBox={`0 0 ${canvasSize.width} ${canvasSize.height}`} aria-label="Geographic map features">
               {project.geographicFeatures.map((feature, index) => {
                 const path = geographicFeaturePath(feature);
                 if (!path) return null;
@@ -1996,11 +2046,11 @@ export default function ScubaMapMaker() {
               })}
             </svg>}
             {selectedFeature && selectedFeature.mode !== "freehand" && visibleLayers.geographicFeatures && selectedFeature.points.map((point, index) => <button className="feature-anchor-handle print-hidden" style={{ ...featureAnchorStyle(selectedFeature), left: point.x, top: point.y }} key={point.id} aria-label={`Move anchor ${index + 1} for ${selectedFeature.name.trim() || "Untitled feature"}. Use arrow keys for fine positioning.`} onPointerDown={(event) => startFeatureAnchorDrag(event, selectedFeature.id, point.id)} onKeyDown={(event) => nudgeFeatureAnchor(event, selectedFeature.id, point.id)}/>) }
-            {visualRouteNetwork.paths.length > 0 && <svg className={`route-network${visibleLayers.routes ? "" : " screen-hidden"}${exportClass(exportSettings.routes)}`} style={routeNetworkStyle} viewBox={`0 0 ${canvasSize.width} ${canvasSize.height}`} shapeRendering="geometricPrecision" aria-hidden="true">
+            {visualRouteNetwork.paths.length > 0 && <svg className={`route-network${visibleLayers.routes ? "" : " screen-hidden"}${exportClass(printSettings.routes)}`} style={routeNetworkStyle} viewBox={`0 0 ${canvasSize.width} ${canvasSize.height}`} shapeRendering="geometricPrecision" aria-hidden="true">
               <defs>
                 <mask id="route-symbol-clearance-mask" className="route-symbol-mask" maskUnits="userSpaceOnUse" maskContentUnits="userSpaceOnUse" x="0" y="0" width={canvasSize.width} height={canvasSize.height}>
                   <rect x="0" y="0" width={canvasSize.width} height={canvasSize.height} fill="white"/>
-                  {routeSymbolPoints.map((point) => <circle className={`route-symbol-cutout${exportClass(exportSettings.pointMarkers && pointInPrintArea(point, printArea))}`} data-route-symbol-cutout={point.id} key={point.id} cx={point.x} cy={point.y} fill="black"/>)}
+                  {routeSymbolPoints.map((point) => <circle className={`route-symbol-cutout${exportClass(printSettings.pointMarkers && pointInPrintArea(point, printArea))}`} data-route-symbol-cutout={point.id} key={point.id} cx={point.x} cy={point.y} fill="black"/>)}
                 </mask>
               </defs>
               <g className="route-network-ink" mask="url(#route-symbol-clearance-mask)">
@@ -2029,8 +2079,8 @@ export default function ScubaMapMaker() {
               const line = geometry(project, vector); if (!line) return null;
               const selectedSegment = selectedVectorId === vector.id;
               return <div className="vector-group" key={vector.id}>
-                <button className={`vector-line${selectedSegment ? " selected-vector" : ""}${visibleLayers.routes ? "" : " screen-hidden"}${exportClass(exportSettings.routes)}`} aria-label={`Select route segment from ${nodeLabel(line.start)} to ${nodeLabel(line.end)}`} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); selectVector(vector); }} style={{ ...routeControlStyle, left: line.start.x, top: line.start.y, width: line.pixels, transform: `rotate(${Math.atan2(line.dy, line.dx)}rad)` }}/>
-                <button className={`vector-label${visibleLayers.routeLabels ? "" : " screen-hidden"}${exportClass(exportSettings.routeLabels)}`} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); selectVector(vector); }} style={{ ...routeControlStyle, left: line.start.x + line.dx / 2, top: line.start.y + line.dy / 2 }}><span>{Math.round(vector.bearing)}°</span><span>{formatNumber(vector.distance)} {vector.unit}</span></button>
+                <button className={`vector-line${selectedSegment ? " selected-vector" : ""}${visibleLayers.routes ? "" : " screen-hidden"}${exportClass(printSettings.routes)}`} aria-label={`Select route segment from ${nodeLabel(line.start)} to ${nodeLabel(line.end)}`} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); selectVector(vector); }} style={{ ...routeControlStyle, left: line.start.x, top: line.start.y, width: line.pixels, transform: `rotate(${Math.atan2(line.dy, line.dx)}rad)` }}/>
+                <button className={`vector-label${visibleLayers.routeLabels ? "" : " screen-hidden"}${exportClass(printSettings.routeLabels)}`} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); selectVector(vector); }} style={{ ...routeControlStyle, left: line.start.x + line.dx / 2, top: line.start.y + line.dy / 2 }}><span>{Math.round(vector.bearing)}°</span><span>{formatNumber(vector.distance)} {vector.unit}</span></button>
               </div>;
             })}
             {selectedRouteVertexIds.map((vertexId) => {
@@ -2049,13 +2099,13 @@ export default function ScubaMapMaker() {
                 onPointerDown={(event) => event.stopPropagation()}
                 onClick={(event) => { event.stopPropagation(); focusRoute(route); }}
               ><span>{route.name}</span></button>
-              {print && <span className={`route-name-label route-name-label-print screen-hidden${exportClass(exportSettings.routeNameLabels)}`} style={routeNameLabelStyle(print)} aria-label={`Route ${route.name}`}><span>{route.name}</span></span>}
+              {print && <span className={`route-name-label route-name-label-print screen-hidden${exportClass(printSettings.routeNameLabels)}`} style={routeNameLabelStyle(clampPrintLabelAnchor(print))} aria-label={`Route ${route.name}`}><span>{route.name}</span></span>}
             </Fragment>)}
-            {geographicFeatureLabels.map(({ feature, name, anchor }) => <Fragment key={`feature-name-${feature.id}`}>
+            {geographicFeatureLabels.map(({ feature, name, anchor }, featureLabelIndex) => <Fragment key={`feature-name-${feature.id}`}>
               <button className={`feature-name-label print-hidden${visibleLayers.geographicFeatureLabels ? "" : " screen-hidden"}`} style={featureNameLabelStyle(anchor)} aria-label={`Map feature ${name}`} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); selectGeographicFeature(feature.id); }}><span>{name}</span></button>
-              {pointInPrintArea(anchor, printArea) && <span className={`feature-name-label feature-name-label-print screen-hidden${exportClass(exportSettings.geographicFeatureLabels)}`} style={featureNameLabelStyle(anchor)} aria-label={`Map feature ${name}`}><span>{name}</span></span>}
+              {pointInPrintArea(anchor, printArea) && <span className={`feature-name-label feature-name-label-print screen-hidden${printFeatureLabelBelow(anchor, featureLabelIndex) ? " feature-name-label-below" : ""}${exportClass(printSettings.geographicFeatureLabels)}`} style={featureNameLabelStyle(clampPrintLabelAnchor(anchor, 84, 60))} aria-label={`Map feature ${name}`}><span>{name}</span></span>}
             </Fragment>)}
-            {depthPoints.length >= 3 && <div className={`contours${visibleLayers.contours ? "" : " screen-hidden"}${exportClass(exportSettings.contours)}`} style={{ left: depthPoints.reduce((sum, point) => sum + point.x, 0) / depthPoints.length, top: depthPoints.reduce((sum, point) => sum + point.y, 0) / depthPoints.length }}><i/><i/><i/><span>estimated depth contours</span></div>}
+            {depthPoints.length >= 3 && <div className={`contours${visibleLayers.contours ? "" : " screen-hidden"}${exportClass(printSettings.contours)}`} style={{ left: depthPoints.reduce((sum, point) => sum + point.x, 0) / depthPoints.length, top: depthPoints.reduce((sum, point) => sum + point.y, 0) / depthPoints.length }}><i/><i/><i/><span>estimated depth contours</span></div>}
             {manualAnnotations.length > 0 && <svg className="point-leaders" style={annotationDisplayStyle} viewBox={`0 0 ${canvasSize.width} ${canvasSize.height}`} shapeRendering="geometricPrecision" aria-hidden="true">
               {manualAnnotations.map(({ point, annotationKind, offset }) => {
                 const screenEnd = annotationPosition(point, offset);
@@ -2076,7 +2126,7 @@ export default function ScubaMapMaker() {
             {project.waypoints.map((point) => {
               const displayName = point.name?.trim() ?? "";
               return <button key={point.id} aria-label={displayName ? `Edit ${point.label} — ${displayName}` : `Edit point of interest ${point.label}`} className={`waypoint named-point${point.symbol ? " has-symbol" : ""}${selectedId === point.id ? " selected" : ""}${exportClass(pointInPrintArea(point, printArea))}`} style={{ ...waypointDisplayStyle, left: point.x, top: point.y }} onClick={(event) => { event.stopPropagation(); setSelectedId(point.id); setSelectedVectorId(null); setSelectedRouteId(null); setSelectedRouteVertexId(null); setSurveyTab("points"); setActivePanel("survey"); setTool("select"); }} onPointerDown={(event) => startDrag(event, "waypoint", point.id)}>
-                {point.symbol ? <PointSymbolImage className={`point-symbol-marker${exportClass(exportSettings.pointMarkers)}`} symbol={point.symbol}/> : <span className={`point-dot${exportClass(exportSettings.pointMarkers)}`}/>}
+                {point.symbol ? <PointSymbolImage className={`point-symbol-marker${exportClass(printSettings.pointMarkers)}`} symbol={point.symbol}/> : <span className={`point-dot${exportClass(printSettings.pointMarkers)}`}/>}
               </button>;
             })}
             {project.waypoints.map((point) => {
@@ -2084,16 +2134,20 @@ export default function ScubaMapMaker() {
               const automaticKinds = contentKinds.filter((annotationKind) => !point.labelOffsets?.[annotationKind]);
               const screenAutomaticKinds = automaticKinds.filter(annotationScreenVisible);
               const printAutomaticKinds = automaticKinds.filter((annotationKind) => annotationPrintVisible(point, annotationKind));
+              const printAutomaticHeights = printAutomaticKinds.map((annotationKind) => printAnnotationBlockHeight(annotationKind, annotationText(point, annotationKind)));
+              const printAutomaticTotalHeight = printAutomaticHeights.reduce((sum, height) => sum + height, 0);
+              const printAutomaticBaseY = point.y > printSource.y + printSource.height - (printAutomaticTotalHeight + 8) / effectivePrintScale ? -printAutomaticTotalHeight - 4 : -4;
               return <Fragment key={`annotations-${point.id}`}>
                 {contentKinds.map((annotationKind) => {
                   const offset = point.labelOffsets?.[annotationKind];
                   const position = offset ? annotationPosition(point, offset) : point;
-                  const printPosition = offset ? annotationPosition(point, offset) : point;
+                  const printPosition = offset ? clampPrintLabelAnchor(annotationPosition(point, offset), 120, 34) : point;
                   const text = annotationText(point, annotationKind);
                   const automaticStyle = offset ? {} : {
                     "--annotation-auto-y": `${(-5 + Math.max(0, screenAutomaticKinds.indexOf(annotationKind)) * 17) / zoom}px`,
                     "--annotation-touch-y": `${((Math.max(0, screenAutomaticKinds.indexOf(annotationKind)) - (screenAutomaticKinds.length - 1) / 2) * 44 - 22) / zoom}px`,
-                    "--annotation-print-y": `${(-4 + Math.max(0, printAutomaticKinds.indexOf(annotationKind)) * 12) / effectivePrintScale}px`,
+                    "--annotation-print-y": `${(printAutomaticBaseY + printAutomaticHeights.slice(0, Math.max(0, printAutomaticKinds.indexOf(annotationKind))).reduce((sum, height) => sum + height, 0)) / effectivePrintScale}px`,
+                    "--print-annotation-stack-x": point.x > printSource.x + printSource.width - 180 / effectivePrintScale ? `calc(-100% - ${7 / effectivePrintScale}px)` : `${7 / effectivePrintScale}px`,
                   } as CSSProperties;
                   const manualPrintStyle = offset ? {
                     "--annotation-print-left": `${printPosition.x}px`,
@@ -2103,14 +2157,14 @@ export default function ScubaMapMaker() {
                 })}
               </Fragment>;
             })}
-            <div className={`north-arrow map-furniture${exportClass(exportSettings.mapFurniture)}`}><b>N</b><svg viewBox="0 0 34 56" aria-hidden="true"><path d="M17 2 31 46 17 39 3 46 17 2Z"/><path d="m17 2 14 44-14-7V2Z"/></svg></div><div className={`scale-bar map-furniture${exportClass(exportSettings.mapFurniture)}`}><i style={{ width: mapBar.pixels }}/><span>{formatNumber(mapBar.value)} {project.distanceUnit}</span></div><div className={`map-units map-furniture${exportClass(exportSettings.mapFurniture)}`}>distance: {UNIT_LABEL[project.distanceUnit]} · depth: {UNIT_LABEL[project.depthUnit]}</div>
+            <div className={`north-arrow map-furniture${exportClass(printSettings.mapFurniture)}`}><b>N</b><svg viewBox="0 0 34 56" aria-hidden="true"><path d="M17 2 31 46 17 39 3 46 17 2Z"/><path d="m17 2 14 44-14-7V2Z"/></svg></div><div className={`scale-bar map-furniture${exportClass(printSettings.mapFurniture)}`}><i style={{ width: mapBar.sourcePixels }}/><span>{formatNumber(mapBar.value)} {project.distanceUnit}</span></div><div className={`map-units map-furniture${exportClass(printSettings.mapFurniture)}`}>distance: {UNIT_LABEL[project.distanceUnit]} · depth: {UNIT_LABEL[project.depthUnit]}</div>
             {(tool === "route" || tool === "point" || tool === "feature") && <div className="map-placement-capture print-hidden" aria-hidden="true"/>}
             </div>
           </div>
           {smartCalloutCandidate && <>
-            <svg className="smart-callout-leaders screen-hidden" data-layout-mode={smartCalloutCandidate.layout.mode} viewBox={`0 0 ${PRINT_FRAME.width} ${PRINT_FRAME.height}`} shapeRendering="geometricPrecision" aria-hidden="true">
+            <svg className="smart-callout-leaders screen-hidden" data-layout-mode={smartCalloutCandidate.layout.mode} viewBox={`0 0 ${PRINT_CHART_FRAME.width} ${PRINT_CHART_FRAME.height}`} shapeRendering="geometricPrecision" aria-hidden="true">
               {smartCalloutCandidate.layout.callouts.map((callout) => <polyline key={callout.id} data-smart-callout-leader={callout.id} points={callout.leader.map((point) => `${point.x},${point.y}`).join(" ")}/>) }
-              {exportSettings.pointMarkers && smartCalloutCandidate.layout.callouts.map((callout) => {
+              {printSettings.pointMarkers && smartCalloutCandidate.layout.callouts.map((callout) => {
                 const symbol = pointMap.get(callout.id)?.symbol;
                 return symbol
                   ? <image className="smart-callout-anchor-symbol" data-smart-callout-marker={callout.id} key={callout.id} href={pointSymbolDefinition(symbol).asset} x={callout.leader[0].x - smartCalloutSymbolSize.width / 2} y={callout.leader[0].y - smartCalloutSymbolSize.height / 2} width={smartCalloutSymbolSize.width} height={smartCalloutSymbolSize.height} preserveAspectRatio="xMidYMid meet"/>
@@ -2122,7 +2176,7 @@ export default function ScubaMapMaker() {
             </div>
             {smartCalloutOverflowIds.length > 0 && <div className="smart-callout-overflow-print screen-hidden" role="alert"><b>Names need more room</b><span>Reduce the PDF crop or hide Names, then print again.</span></div>}
           </>}
-          {(printArea || smartCalloutsActive) && <div className={`print-crop-furniture${exportClass(exportSettings.mapFurniture)}`}><div className="north-arrow"><b>N</b><span>↑</span></div><div className="scale-bar"><i/><span>{formatNumber(mapBar.value)} {project.distanceUnit}</span></div><div className="map-units">distance: {UNIT_LABEL[project.distanceUnit]} · depth: {UNIT_LABEL[project.depthUnit]}</div></div>}
+          <div className={`print-crop-furniture${exportClass(printSettings.mapFurniture)}`}><div className="north-arrow"><b>N</b><svg viewBox="0 0 34 56" aria-hidden="true"><path d="M17 2 31 46 17 39 3 46 17 2Z"/><path d="m17 2 14 44-14-7V2Z"/></svg></div><div className="scale-bar"><i/><span>{formatNumber(printBar.value)} {project.distanceUnit}</span></div></div>
 
           {routeDraft && <div className="route-draw-controls print-hidden" role="toolbar" aria-label="Route drawing controls">
             <span>{routeDraft.extendRouteId ? "Extending route" : "New route"} · {routeDraft.points.length} {routeDraft.points.length === 1 ? "vertex" : "vertices"}</span>
@@ -2220,9 +2274,17 @@ export default function ScubaMapMaker() {
                 <p className="drawer-copy lead">Choose the crop and detail included when you print or save a PDF.</p>
                 <div className="print-area-controls"><button className={tool === "printArea" ? "active" : ""} onClick={() => { setTool("printArea"); setActivePanel(null); setNotice("Drag a rectangle over the map to set the PDF print area."); }}>{printArea ? "Redraw print area" : "Set print area"}</button>{printArea && <button onClick={() => mutate((current) => { delete current.printArea; return current; })}>Clear print area</button>}</div>
                 {printArea && <p className="print-area-note">Selected area: {Math.round(printArea.width)} × {Math.round(printArea.height)} map pixels · {printPoints.length} point{printPoints.length === 1 ? "" : "s"} in PDF</p>}
+                <div className="drawer-section export-presets">
+                  <h3>Readability presets</h3>
+                  <div className="button-row"><button onClick={() => applyExportPreset("clean")}>Clean chart</button><button onClick={() => applyExportPreset("full")}>Full survey detail</button></div>
+                  <p className="drawer-copy">Presets update the existing layer choices; no extra preset is saved with the project.</p>
+                </div>
                 <div className="drawer-section export-settings">
                   <h3>PDF layers</h3>
-                  <div className="export-grid">{([ ["reference", "Reference image"], ["shoreline", "Shoreline"], ["geographicFeatures", "Map features"], ["geographicFeatureLabels", "Feature labels"], ["routes", "Route lines"], ["routeLabels", "Route bearings & distances"], ["routeNameLabels", "Named route labels"], ["pointMarkers", "Point markers"], ["pointNames", "Point Names (P1, P2)"], ["fullPointNames", "Names (Swim platform)"], ["depths", "Depths"], ["contours", "Depth contours"], ["mapFurniture", "North arrow & scale"], ["pointTable", "Point detail table"] ] as Array<[ExportToggleKey, string]>).map(([setting, label]) => <label key={setting}><input type="checkbox" checked={exportSettings[setting]} onChange={(event) => setExportSetting(setting, event.target.checked)}/>{label}</label>)}</div>
+                  <div className="export-grid">{([ ["reference", "Reference image"], ["shoreline", "Shoreline"], ["geographicFeatures", "Map features"], ["geographicFeatureLabels", "Feature labels"], ["routes", "Route lines"], ["routeLabels", "Route bearings & distances"], ["routeNameLabels", "Named route labels"], ["pointMarkers", "Point markers"], ["pointNames", "Point Names (P1, P2)"], ["fullPointNames", "Names (Swim platform)"], ["depths", "Depths"], ["contours", "Depth contours"], ["mapFurniture", "North arrow & scale"], ["pointTable", "Details appendix"] ] as Array<[ExportToggleKey, string]>).map(([setting, label]) => {
+                    const disabled = (setting === "routeLabels" || setting === "routeNameLabels") ? !exportSettings.routes : setting === "geographicFeatureLabels" ? !exportSettings.geographicFeatures : false;
+                    return <label className={disabled ? "dependent-disabled" : ""} key={setting}><input type="checkbox" checked={exportSettings[setting]} disabled={disabled} onChange={(event) => setExportSetting(setting, event.target.checked)}/>{label}</label>;
+                  })}</div>
                 </div>
                 <div className="drawer-section name-placement-section">
                   <h3>Name placement</h3>
@@ -2232,7 +2294,7 @@ export default function ScubaMapMaker() {
                   </div>
                 </div>
                 {smartCalloutOverflowIds.length > 0 && <p className="callout-overflow-message" id="callout-overflow-message" role="alert"><b>{smartCalloutOverflowIds.length} Name{smartCalloutOverflowIds.length === 1 ? "" : "s"} need more room.</b> Reduce the print area or hide Names before exporting.</p>}
-                <button className="primary-button export-print" disabled={smartCalloutOverflowIds.length > 0} aria-describedby={smartCalloutOverflowIds.length ? "callout-overflow-message" : undefined} onClick={() => window.print()}><SoundingsIcon name="export"/>Print / Save PDF</button>
+                <button className="primary-button export-print" disabled={smartCalloutOverflowIds.length > 0 || isPreparingPrint} aria-describedby={smartCalloutOverflowIds.length ? "callout-overflow-message" : undefined} onClick={() => void prepareAndPrint()}><SoundingsIcon name="export"/>{isPreparingPrint ? "Preparing PDF…" : "Print / Save PDF"}</button>
                 <p className="print-note">{smartCalloutsActive ? "Names will print in connected callout rails." : "Print with selected settings"}</p>
               </div>
             </>}
@@ -2246,7 +2308,19 @@ export default function ScubaMapMaker() {
           <div className="zoom-controls print-hidden"><button aria-label="Zoom out" onClick={() => changeMapZoom(1 / 1.25)}>−</button><span>{Math.round(zoom * 100)}%</span><button aria-label="Zoom in" onClick={() => changeMapZoom(1.25)}>＋</button><button className="recenter-button" aria-label="Recenter map" onClick={fitEntireMapToStage}><SoundingsIcon name="recenter"/></button></div>
           <div className="map-readout print-hidden"><span>{formatNumber(mapScale(project))} m / px</span><span>{project.waypoints.length} {project.waypoints.length === 1 ? "point" : "points"}</span><span>{routes.length} {routes.length === 1 ? "route" : "routes"}</span><span>{project.geographicFeatures.length} {project.geographicFeatures.length === 1 ? "feature" : "features"}</span></div>
         </div>
-        <section className="print-details"><h2>{project.title}</h2><p>{project.notes || "Dive-site sketch prepared with Soundings."}</p><p className="print-scale">Scale: {formatNumber(mapScale(project))} meters per map pixel · {formatNumber(mapBar.value)} {project.distanceUnit} scale bar</p><table className={exportClass(exportSettings.pointTable)}><thead><tr><th>Point</th><th>Name</th><th>Depth</th><th>Position</th></tr></thead><tbody>{printPoints.map((point) => <tr key={point.id}><td>{point.label}</td><td>{point.name || "—"}</td><td>{formatDepth(point, project.depthUnit)}</td><td>{Math.round(point.x)}, {Math.round(point.y)}</td></tr>)}</tbody></table></section>
+          <div className="print-sheet-footer"><span>Distance: {UNIT_LABEL[project.distanceUnit]} · Depth: {UNIT_LABEL[project.depthUnit]}</span><span>Calibration: {formatNumber(mapScale(project))} m per map px</span></div>
+        </section>
+        <section className={`print-details${exportClass(printSettings.pointTable)}`}>
+          <header className="print-appendix-header"><div><span>Details appendix</span><h2>{project.title}</h2></div><time dateTime={project.date}>{formatProjectDate(project.date)}</time></header>
+          <section className="print-appendix-section print-notes"><h3>Notes</h3><p>{project.notes.trim() || "No project notes."}</p></section>
+          <section className="print-appendix-section"><h3>Points</h3>{printPointTableChunks.map((pointsChunk, chunkIndex) => <table className="print-point-table-chunk" key={`points-${chunkIndex}`}>
+            {chunkIndex > 0 && <caption>Points — continued</caption>}
+            <thead><tr><th>Point</th><th>Name</th><th>Depth</th><th>Map position (px)</th></tr></thead>
+            <tbody>{pointsChunk.length ? pointsChunk.map((point) => <tr key={point.id}><td>{point.label}</td><td>{point.name || "—"}</td><td>{formatDepth(point, project.depthUnit)}</td><td>{Math.round(point.x)}, {Math.round(point.y)}</td></tr>) : <tr><td colSpan={4}>No points fall inside the selected map area.</td></tr>}</tbody>
+          </table>)}</section>
+          {routeLegRows.length > 0 && <section className="print-appendix-section"><h3>Ordered route-leg schedule</h3><table><thead><tr><th>Route</th><th>Leg</th><th>From</th><th>To</th><th>Bearing</th><th>Distance</th></tr></thead><tbody>{routeLegRows.map((row) => <tr key={`${row.routeId}-${row.leg}-${row.vectorId}`}><td>{row.routeName}</td><td>{row.leg}</td><td>{row.fromLabel}</td><td>{row.toLabel}</td><td>{Math.round(row.bearing)}°</td><td>{formatNumber(row.distance)} {row.unit}</td></tr>)}</tbody></table></section>}
+          {usedSymbolLegend.length > 0 && <section className="print-appendix-section"><h3>Symbols used</h3><ul className="print-symbol-legend">{usedSymbolLegend.map((symbol) => <li key={symbol.id}><PointSymbolImage className="print-legend-symbol" symbol={symbol.id}/><span>{symbol.label}</span></li>)}</ul></section>}
+        </section>
       </section>
     </main>
   );
