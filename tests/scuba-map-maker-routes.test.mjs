@@ -460,7 +460,9 @@ test("supports independently movable point annotations with compatible persisten
   assert.match(page, /"--annotation-print-left": `\$\{printPosition\.x\}px`/);
   assert.match(page, /"--annotation-print-top": `\$\{printPosition\.y\}px`/);
   assert.match(styles, /\.water-label \{[^}]*font-size: var\(--print-secondary-text-size\) !important;/);
-  assert.match(styles, /\.contours span, \.vector-label, \.point-annotation-pointName, \.point-annotation-depth \{ font-size: var\(--print-secondary-text-size\) !important; \}/);
+  assert.match(styles, /\.vector-label, \.point-annotation-pointName, \.point-annotation-depth \{ font-size: var\(--print-secondary-text-size\) !important; \}/);
+  assert.doesNotMatch(page, /contours|Depth contours|estimated depth contours/i);
+  assert.doesNotMatch(styles, /\.contours|\.contour-glyph|--print-contour/i);
   assert.match(styles, /\.route-name-label, \.feature-name-label-print, \.point-annotation-name \{ font-size: var\(--print-primary-text-size\) !important; \}/);
   assert.match(styles, /\.vector-label \{[^}]*padding:\s*var\(--print-map-label-padding-y\) var\(--print-map-label-padding-x\)/);
   assert.match(styles, /\.point-annotation-auto \{ transform: translate\(var\(--print-annotation-stack-x\), var\(--annotation-print-y\)\) !important; \}/);

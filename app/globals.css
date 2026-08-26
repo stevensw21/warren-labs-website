@@ -173,6 +173,7 @@ svg { display: block; }
 .reference-image { position: absolute; left: 0; top: 0; z-index: 1; object-fit: contain; transform-origin: center; pointer-events: none; mix-blend-mode: normal; }
 .shoreline-path { position: absolute; inset: 0; z-index: 3; width: 100%; height: 100%; pointer-events: none; }
 .shoreline-path path { fill: none; stroke-linecap: round; stroke-linejoin: round; }
+.shoreline-path .shoreline-fill { display: none; fill: var(--sand); stroke: none; }
 .shoreline-base { stroke: var(--sand); stroke-width: var(--shore-base-width, 12px); }
 .shoreline-edge { stroke: var(--sand-edge); stroke-width: var(--shore-edge-width, 2px); opacity: .78; }
 .coast-vertex { position: absolute; z-index: 5; display: grid; place-items: center; width: var(--coast-hit-size, 44px); height: var(--coast-hit-size, 44px); padding: 0; border: 0; border-radius: 50%; background: transparent; transform: translate(-50%, -50%); touch-action: none; cursor: grab; }
@@ -255,12 +256,6 @@ svg { display: block; }
 .point-annotation-name { color: rgba(11,48,75,.75); font-size: var(--annotation-detail-size, 10px); font-weight: 650; }
 .point-annotation-depth { color: #157f96; font-size: var(--annotation-detail-size, 10px); font-weight: 650; }
 @media screen { .point-annotation-name.screen-primary-name { color: var(--map-ink); font-size: var(--annotation-label-size, 13px); font-weight: 760; } }
-.contours { position: absolute; z-index: 2; width: 330px; height: 240px; opacity: .56; transform: translate(-50%, -50%) rotate(-9deg); pointer-events: none; }
-.contours i { position: absolute; border: 1px solid rgba(21,157,181,.72); border-radius: 48% 52% 46% 54%; }
-.contours i:nth-child(1) { inset: 0; }
-.contours i:nth-child(2) { inset: 34px 46px; }
-.contours i:nth-child(3) { inset: 71px 92px; }
-.contours span { position: absolute; bottom: -19px; width: 100%; color: #15839b; font-size: 9px; font-weight: 650; letter-spacing: .05em; text-align: center; }
 .north-arrow { color: var(--map-ink); text-align: center; }
 .north-arrow b { display: block; font-size: 14px; }
 .north-arrow svg { width: 34px; height: 56px; }
@@ -366,7 +361,6 @@ svg { display: block; }
 .layer-list label:has(.label-glyph) { display: grid; grid-template-columns: 19px 1fr auto; gap: 11px; }
 .label-glyph { color: var(--on-dark-muted); font-size: 17px; text-align: center; }
 .label-glyph.compact { font-size: 9px; font-weight: 750; letter-spacing: -.02em; }
-.contour-glyph { display: inline-block; width: 19px; height: 15px; border: 1.5px solid var(--on-dark-muted); border-radius: 50%; box-shadow: inset 0 0 0 3px var(--chrome-900), inset 0 0 0 4px var(--on-dark-muted); }
 .switch { position: relative; width: 34px; height: 20px; margin: 0; appearance: none; border: 0; border-radius: 999px; background: rgba(170,184,193,.34); cursor: pointer; transition: background 150ms ease; }
 .switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 14px; height: 14px; border-radius: 50%; background: white; transition: transform 150ms ease; }
 .switch:checked { background: var(--coral); }
@@ -774,9 +768,9 @@ svg { display: block; }
   .map-canvas, .map-stage.has-print-area .map-canvas, .map-stage.smart-callout-mode .map-canvas { background-color: #dff4f2; transform: translate(var(--print-canvas-offset-x), var(--print-canvas-offset-y)) scale(var(--print-map-scale)) !important; transform-origin: top left; outline: none; box-shadow: none; }
   .map-canvas > .map-furniture { display: none !important; }
   .reference-image { opacity: var(--print-reference-opacity, .35) !important; mix-blend-mode: normal !important; }
+  .shoreline-path .shoreline-fill { display: block; fill: var(--sand); fill-opacity: .12; stroke: none; }
   .shoreline-base { stroke-width: var(--print-shore-base-width, 6px) !important; }
   .shoreline-edge { stroke-width: var(--print-shore-edge-width, 1.5px) !important; }
-  .contours i { border-width: var(--print-contour-width, 1.25px) !important; }
   .feature-layer { color: var(--feature-color, #315e66); print-color-adjust: exact; -webkit-print-color-adjust: exact; }
   .feature-path { stroke-width: var(--print-feature-stroke-width, 2px) !important; stroke-dasharray: var(--print-feature-dash-array, var(--feature-dash-array, none)) !important; }
   .feature-hit-path, .feature-selected-path { display: none !important; }
@@ -789,7 +783,7 @@ svg { display: block; }
   .route-network-branch { fill: #174b5c !important; }
   .route-network-selection, .vector-line { display: none !important; }
   .water-label { top: var(--print-water-label-top) !important; left: var(--print-water-label-left) !important; max-width: var(--print-water-label-width) !important; overflow: hidden !important; font-size: var(--print-secondary-text-size) !important; text-overflow: ellipsis; white-space: nowrap; }
-  .contours span, .vector-label, .point-annotation-pointName, .point-annotation-depth { font-size: var(--print-secondary-text-size) !important; }
+  .vector-label, .point-annotation-pointName, .point-annotation-depth { font-size: var(--print-secondary-text-size) !important; }
   .route-name-label, .feature-name-label-print, .point-annotation-name { font-size: var(--print-primary-text-size) !important; }
   .vector-label { gap: var(--print-map-label-gap) !important; padding: var(--print-map-label-padding-y) var(--print-map-label-padding-x) !important; border: var(--print-map-label-border) solid rgba(30,80,96,.38) !important; border-radius: var(--print-map-label-radius) !important; background: rgba(255,255,255,.94) !important; color: #174b5c !important; text-shadow: none !important; }
   .route-name-label { z-index: 14 !important; width: var(--print-route-name-width) !important; min-height: 0 !important; color: #174b5c !important; transform: translate(-50%, 24%) rotate(var(--route-name-angle, 0rad)) !important; }

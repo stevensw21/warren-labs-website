@@ -14,7 +14,6 @@ export type ExportSettings = {
   pointNames: boolean;
   fullPointNames: boolean;
   depths: boolean;
-  contours: boolean;
   mapFurniture: boolean;
   pointTable: boolean;
   namePlacement?: NamePlacement;
@@ -35,7 +34,6 @@ export const FULL_DETAIL_EXPORT_SETTINGS: Readonly<ExportSettings> = Object.free
   pointNames: true,
   fullPointNames: true,
   depths: true,
-  contours: true,
   mapFurniture: true,
   pointTable: true,
   namePlacement: "smartCallouts",
@@ -45,11 +43,13 @@ export const CLEAN_CHART_EXPORT_SETTINGS: Readonly<ExportSettings> = Object.free
   ...FULL_DETAIL_EXPORT_SETTINGS,
   reference: false,
   routeLabels: false,
-  contours: false,
 });
 
-export function normalizeExportSettings(saved?: Partial<ExportSettings>): ExportSettings {
-  const source = saved ?? FULL_DETAIL_EXPORT_SETTINGS;
+type LegacyExportSettings = Partial<ExportSettings> & { contours?: unknown };
+
+export function normalizeExportSettings(saved?: LegacyExportSettings): ExportSettings {
+  const source = { ...(saved ?? {}) };
+  delete source.contours;
   const namePlacement: NamePlacement = source.namePlacement === "asPositioned" ? "asPositioned" : "smartCallouts";
   const routeNameLabels = source.routeNameLabels ?? source.routeLabels ?? FULL_DETAIL_EXPORT_SETTINGS.routeNameLabels;
   return { ...FULL_DETAIL_EXPORT_SETTINGS, ...source, routeNameLabels, namePlacement };

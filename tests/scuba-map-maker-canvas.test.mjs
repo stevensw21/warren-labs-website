@@ -86,7 +86,7 @@ test("uses extended canvas bounds for pointer placement, print areas, features, 
   assert.doesNotMatch(page, /fullCanvasPrintScale|printCropScale|--print-full-scale/);
 });
 
-test("offers Select-only east, south, and southeast resize handles with keyboard increments", async () => {
+test("offers Select-only bidirectional resize handles with protected content bounds", async () => {
   const page = await readFile(pageUrl, "utf8");
   const resizeType = blockAt(page, "type CanvasResizeHandle =");
   const startCanvasResize = blockAt(page, "const startCanvasResize");
@@ -101,13 +101,17 @@ test("offers Select-only east, south, and southeast resize handles with keyboard
   assert.match(resizeCanvasWithKeyboard, /event\.preventDefault\(\);\s*event\.stopPropagation\(\);/);
   assert.match(resizeCanvasWithKeyboard, /ArrowRight/);
   assert.match(resizeCanvasWithKeyboard, /ArrowDown/);
+  assert.match(resizeCanvasWithKeyboard, /ArrowLeft/);
+  assert.match(resizeCanvasWithKeyboard, /ArrowUp/);
+  assert.match(resizeCanvasWithKeyboard, /minimumCanvasSizeForProject\(project, canvasSize\)/);
+  assert.match(resizeCanvasWithKeyboard, /normalizePrintArea\(current\.printArea, current\.canvasSize\)/);
   assert.match(resizeCanvasWithKeyboard, /MAX_CANVAS_DIMENSION/);
 
   assert.match(handles, /tool\s*===\s*"select"/);
   for (const [handle, label] of [
-    ["east", "Extend canvas right edge"],
-    ["south", "Extend canvas bottom edge"],
-    ["southeast", "Extend canvas right and bottom edges"],
+    ["east", "Resize canvas right edge"],
+    ["south", "Resize canvas bottom edge"],
+    ["southeast", "Resize canvas right and bottom edges"],
   ]) {
     assert.match(handles, new RegExp(`className="canvas-resize-handle ${handle}"`));
     assert.match(handles, new RegExp(`aria-label="${label}"`));
@@ -136,8 +140,10 @@ test("restores a canceled canvas resize without adding undo history", async () =
 
   assert.match(pointerMove, /activeDrag\.kind\s*===\s*"canvasResize"/);
   assert.match(pointerMove, /normalizeCanvasSize/);
-  assert.match(pointerMove, /Math\.max\(activeDrag\.canvasSize\.width/);
-  assert.match(pointerMove, /Math\.max\(activeDrag\.canvasSize\.height/);
+  assert.match(pointerMove, /minimumCanvasSizeForProject\(activeDrag\.start, activeDrag\.canvasSize\)/);
+  assert.match(pointerMove, /Math\.max\(minimumSize\.width/);
+  assert.match(pointerMove, /Math\.max\(minimumSize\.height/);
+  assert.match(pointerMove, /normalizePrintArea\(current\.printArea, current\.canvasSize\)/);
   assert.match(pointerUp, /kind\s*===\s*"canvasResize"/);
   assert.match(pointerUp, /event\.type\s*===\s*"pointercancel"/);
   assert.match(pointerUp, /update\(original,\s*false\)/);
@@ -150,6 +156,17 @@ test("restores a canceled canvas resize without adding undo history", async () =
   assert.ok(undoIndex === -1 || undoIndex > returnIndex, "pointer cancel must return before resize undo history is recorded");
 
   assert.match(page, /onPointerCancel=\{onStagePointerUp\}/);
+});
+
+test("prints a subtle closed shoreline fill below the shoreline strokes", async () => {
+  const [page, styles] = await Promise.all([readFile(pageUrl, "utf8"), readFile(stylesUrl, "utf8")]);
+  const shoreline = windowAround(page, 'className="shoreline-fill"', 400, 1_000);
+
+  assert.match(shoreline, /coast\.length > 2 && <path className="shoreline-fill"/);
+  assert.ok(shoreline.indexOf('className="shoreline-fill"') < shoreline.indexOf('className="shoreline-base"'));
+  assert.ok(shoreline.indexOf('className="shoreline-base"') < shoreline.indexOf('className="shoreline-edge"'));
+  assert.match(styles, /\.shoreline-path \.shoreline-fill \{ display: none; fill: var\(--sand\); stroke: none; \}/);
+  assert.match(styles, /@media print[\s\S]*\.shoreline-path \.shoreline-fill \{ display: block; fill: var\(--sand\); fill-opacity: \.12; stroke: none; \}/);
 });
 
 test("pins uploaded references to their saved frame when the canvas grows", async () => {

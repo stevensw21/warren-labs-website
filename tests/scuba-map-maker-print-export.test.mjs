@@ -15,12 +15,11 @@ test("defines clean-chart and full-survey presets without a persisted preset fie
     ...FULL_DETAIL_EXPORT_SETTINGS,
     reference: false,
     routeLabels: false,
-    contours: false,
   });
   assert.equal("preset" in CLEAN_CHART_EXPORT_SETTINGS, false);
   assert.equal(FULL_DETAIL_EXPORT_SETTINGS.reference, true);
   assert.equal(FULL_DETAIL_EXPORT_SETTINGS.routeLabels, true);
-  assert.equal(FULL_DETAIL_EXPORT_SETTINGS.contours, true);
+  assert.equal("contours" in FULL_DETAIL_EXPORT_SETTINGS, false);
   assert.equal(FULL_DETAIL_EXPORT_SETTINGS.pointTable, true);
 });
 
@@ -32,6 +31,8 @@ test("uses full detail for missing legacy settings and preserves saved values", 
   assert.equal(saved.routeLabels, true);
   assert.equal(saved.namePlacement, "asPositioned");
   assert.equal(saved.pointTable, true);
+  const legacy = normalizeExportSettings({ contours: true });
+  assert.equal("contours" in legacy, false);
 });
 
 test("suppresses dependent labels without erasing their saved preferences", () => {
