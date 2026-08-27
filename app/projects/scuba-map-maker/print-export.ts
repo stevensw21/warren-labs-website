@@ -6,6 +6,7 @@ export type ExportSettings = {
   shoreline: boolean;
   geographicFeatures: boolean;
   geographicFeatureLabels: boolean;
+  floatingText: boolean;
   routes: boolean;
   routeLabels: boolean;
   routeNameLabels: boolean;
@@ -26,6 +27,7 @@ export const FULL_DETAIL_EXPORT_SETTINGS: Readonly<ExportSettings> = Object.free
   shoreline: true,
   geographicFeatures: true,
   geographicFeatureLabels: true,
+  floatingText: true,
   routes: true,
   routeLabels: true,
   routeNameLabels: true,

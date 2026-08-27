@@ -27,13 +27,16 @@ test("keeps project documents on v2 without upgrading the IndexedDB store", asyn
 
   assert.match(page, /type Project = \{\s*version: 2;/);
   assert.match(projectType, /geographicFeatures: GeographicFeature\[\]/);
+  assert.match(projectType, /floatingTexts: FloatingText\[\]/);
   assert.match(storedProjectType, /Omit<Project, [^>]*"geographicFeatures"[^>]*>/);
   assert.match(storedProjectType, /version: 1 \| 2/);
   assert.match(storedProjectType, /routeVertices\?: RouteVertex\[\]/);
   assert.match(storedProjectType, /geographicFeatures\?: (?:unknown|GeographicFeature\[\])/);
+  assert.match(storedProjectType, /floatingTexts\?: unknown/);
   assert.match(page, /version: 2, id: id\(\)/);
   assert.match(page, /routeVertices: \[\]/);
   assert.match(page, /geographicFeatures: \[\]/);
+  assert.match(page, /floatingTexts: \[\]/);
   assert.match(page, /indexedDB\.open\(DB_NAME, 1\)/);
   assert.doesNotMatch(page, /indexedDB\.open\(DB_NAME, 2\)/);
   assert.match(page, /request\.result\.createObjectStore\(STORE_NAME, \{ keyPath: "id" \}\)/);
@@ -54,6 +57,7 @@ test("accepts v1 and v2 backups, normalizes them to v2, and exports the v2 proje
   assert.match(page, /project\.coastline = Array\.isArray\(project\.coastline\) \? project\.coastline : \[\]/);
   assert.match(normalizeProject, /normalizeGeographicFeatures\(/);
   assert.match(normalizeProject, /(?:stored|project)\.geographicFeatures/);
+  assert.match(normalizeProject, /normalizeFloatingTexts\(stored\.floatingTexts, project\.canvasSize, id, project\.geographicFeatures\.map/);
   assert.match(page, /new Blob\(\[JSON\.stringify\(project, null, 2\)\], \{ type: "application\/json" \}\)/);
   assert.match(page, /Project v\$\{raw\.version\} backup imported and normalized to v2\./);
 });
@@ -85,9 +89,11 @@ test("keeps the v1 field capture handoff geographic-feature-free", () => {
       closed: false,
       style: { color: "#174b5c", width: 2, dash: "solid" },
     }],
+    floatingTexts: [{ id: "text-1", text: "Swim platform", x: 40, y: 50, size: 24, rotation: 15 }],
   });
 
   assert.equal(packageValue.version, 1);
   assert.deepEqual(packageValue.points.map(({ id }) => id), ["poi-1"]);
   assert.equal("geographicFeatures" in packageValue, false);
+  assert.equal("floatingTexts" in packageValue, false);
 });

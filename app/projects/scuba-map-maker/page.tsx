@@ -51,6 +51,19 @@ import { collapseRouteVertex, deleteRouteSegment, deleteSavedRoute, insertRouteM
 import { planarizeRouteTopology } from "./route-topology";
 import { buildRouteNetwork, type RoutePath } from "./route-network";
 import {
+  DEFAULT_FLOATING_TEXT_SIZE,
+  MAX_FLOATING_TEXT_LENGTH,
+  MAX_FLOATING_TEXT_SIZE,
+  MIN_FLOATING_TEXT_SIZE,
+  floatingTextEqual,
+  normalizeFloatingTextContent,
+  normalizeFloatingTextRotation,
+  normalizeFloatingTexts,
+  normalizeFloatingTextSize,
+  translateFloatingText,
+  type FloatingText,
+} from "./floating-text";
+import {
   DEFAULT_GEOGRAPHIC_FEATURE_STYLE,
   geographicFeatureLabelAnchor,
   geographicFeaturePath,
@@ -85,22 +98,22 @@ type ReferenceImage = { dataUrl?: string; opacity: number; scale: number; x: num
 type Calibration = { routeId?: string; vectorId?: string; distance?: number; unit?: Unit; metersPerPixel: number };
 type Project = {
   version: 2; id: string; title: string; date: string; notes: string; distanceUnit: Unit; depthUnit: Unit;
-  coastline: CoastPoint[]; shoreLocked?: boolean; geographicFeatures: GeographicFeature[]; waypoints: Point[]; routeVertices: RouteVertex[]; vectors: Vector[]; routes?: SavedRoute[]; reference: ReferenceImage; calibration?: Calibration; exportSettings?: ExportSettings; printArea?: PrintArea; pointSymbolScale?: number; visualScaleStopZoom?: number; canvasSize?: CanvasSize;
+  coastline: CoastPoint[]; shoreLocked?: boolean; geographicFeatures: GeographicFeature[]; floatingTexts: FloatingText[]; waypoints: Point[]; routeVertices: RouteVertex[]; vectors: Vector[]; routes?: SavedRoute[]; reference: ReferenceImage; calibration?: Calibration; exportSettings?: ExportSettings; printArea?: PrintArea; pointSymbolScale?: number; visualScaleStopZoom?: number; canvasSize?: CanvasSize;
 };
-type StoredProject = Omit<Project, "version" | "routeVertices" | "geographicFeatures"> & { version: 1 | 2; routeVertices?: RouteVertex[]; geographicFeatures?: unknown };
+type StoredProject = Omit<Project, "version" | "routeVertices" | "geographicFeatures" | "floatingTexts"> & { version: 1 | 2; routeVertices?: RouteVertex[]; geographicFeatures?: unknown; floatingTexts?: unknown };
 type ProjectSyncMessage =
   | { type: "project-update"; protocol: 2; source: string; project: Project }
   | { type: "project-request"; protocol: 2; source: string; projectId: string };
-type Tool = "select" | "coast" | "feature" | "point" | "route" | "reference" | "printArea";
+type Tool = "select" | "coast" | "feature" | "text" | "point" | "route" | "reference" | "printArea";
 type ActivePanel = "projects" | "survey" | "settings" | "export" | null;
 type SurveyTab = "routes" | "points" | "features";
 type PointFilter = "all" | "named" | "unnamed";
 type CaptureImportReview = { packageValue: FieldCapturePackage; additions: CapturedPoint[]; conflicts: CapturedPoint[] };
-type LayerVisibility = { shoreline: boolean; geographicFeatures: boolean; geographicFeatureLabels: boolean; routes: boolean; routeLabels: boolean; routeNameLabels: boolean; pointNames: boolean; names: boolean; depths: boolean; mapFurniture: boolean };
+type LayerVisibility = { shoreline: boolean; geographicFeatures: boolean; geographicFeatureLabels: boolean; floatingText: boolean; routes: boolean; routeLabels: boolean; routeNameLabels: boolean; pointNames: boolean; names: boolean; depths: boolean; mapFurniture: boolean };
 type PrintAreaHandle = "move" | "nw" | "ne" | "se" | "sw";
 type CanvasResizeHandle = "east" | "south" | "southeast";
 type DragDetails = { id?: string; pointId?: string; annotationKind?: PointAnnotationKind; offset?: LabelOffset; initialOffset?: LabelOffset; hadOffset?: boolean; moved?: boolean; changed?: boolean; originX?: number; originY?: number; start: Project; x: number; y: number; point?: { x: number; y: number }; area?: PrintArea; handle?: PrintAreaHandle; canvasSize?: CanvasSize; resizeHandle?: CanvasResizeHandle };
-type Drag = ({ kind: "waypoint" | "routeVertex" | "annotation" | "coast" | "pan" | "reference" | "printAreaDraw" | "printAreaAdjust" | "canvasResize" } | { kind: "feature" | "featureAnchor" | "featureFreehand" }) & DragDetails;
+type Drag = ({ kind: "waypoint" | "routeVertex" | "annotation" | "coast" | "pan" | "reference" | "printAreaDraw" | "printAreaAdjust" | "canvasResize" | "floatingText" } | { kind: "feature" | "featureAnchor" | "featureFreehand" }) & DragDetails;
 type DockDrag = { pointerId: number; offsetX: number; offsetY: number };
 type DraftRoutePoint = { x: number; y: number; nodeId?: string };
 type RouteDraft = { points: DraftRoutePoint[]; name: string; extendRouteId?: string; extendAt?: "start" | "end" };
@@ -144,7 +157,7 @@ async function waitForPrintImages(root: ParentNode) {
 }
 const emptyProject = (title = "Untitled dive site"): Project => ({
   version: 2, id: id(), title, date: new Date().toISOString().slice(0, 10), notes: "", distanceUnit: "ft", depthUnit: "ft",
-  coastline: [], shoreLocked: false, geographicFeatures: [], waypoints: [], routeVertices: [], vectors: [], routes: [], calibration: { metersPerPixel: DEFAULT_METERS_PER_PIXEL }, exportSettings: { ...CLEAN_CHART_EXPORT_SETTINGS },
+  coastline: [], shoreLocked: false, geographicFeatures: [], floatingTexts: [], waypoints: [], routeVertices: [], vectors: [], routes: [], calibration: { metersPerPixel: DEFAULT_METERS_PER_PIXEL }, exportSettings: { ...CLEAN_CHART_EXPORT_SETTINGS },
   pointSymbolScale: DEFAULT_POINT_SYMBOL_SCALE,
   visualScaleStopZoom: DEFAULT_VISUAL_SCALE_STOP_ZOOM,
   canvasSize: { ...DEFAULT_CANVAS_SIZE },
@@ -165,6 +178,7 @@ function minimumCanvasSizeForProject(project: Project, currentSize: CanvasSize):
   return protectedCanvasResizeMinimum([
     ...project.coastline,
     ...project.geographicFeatures.flatMap((feature) => feature.points),
+    ...project.floatingTexts,
     ...project.waypoints,
     ...project.routeVertices,
   ], currentSize);
@@ -332,6 +346,7 @@ function normalizeProject(raw: StoredProject | Project): Project {
   project.canvasSize = normalizeCanvasSize(project.canvasSize);
   project.coastline = Array.isArray(project.coastline) ? project.coastline : [];
   project.geographicFeatures = normalizeGeographicFeatures(stored.geographicFeatures, id);
+  project.floatingTexts = normalizeFloatingTexts(stored.floatingTexts, project.canvasSize, id, project.geographicFeatures.map((feature) => feature.id));
   const savedReference = project.reference ?? ({} as Partial<ReferenceImage>);
   project.reference = { dataUrl: savedReference.dataUrl, opacity: savedReference.opacity ?? 0.48, scale: savedReference.scale ?? 1, x: savedReference.x ?? 0, y: savedReference.y ?? 0, visible: savedReference.visible ?? true, locked: savedReference.locked ?? false, frame: normalizeCanvasSize(savedReference.frame ?? project.canvasSize) };
   project.waypoints = (project.waypoints ?? []).map((point) => {
@@ -473,7 +488,7 @@ export default function ScubaMapMaker() {
   const [dockPosition, setDockPosition] = useState<DockPosition | null>(null);
   const [dockDragging, setDockDragging] = useState(false);
   const [canvasResizeActive, setCanvasResizeActive] = useState(false);
-  const [visibleLayers, setVisibleLayers] = useState<LayerVisibility>({ shoreline: true, geographicFeatures: true, geographicFeatureLabels: true, routes: true, routeLabels: true, routeNameLabels: true, pointNames: true, names: true, depths: true, mapFurniture: true });
+  const [visibleLayers, setVisibleLayers] = useState<LayerVisibility>({ shoreline: true, geographicFeatures: true, geographicFeatureLabels: true, floatingText: true, routes: true, routeLabels: true, routeNameLabels: true, pointNames: true, names: true, depths: true, mapFurniture: true });
   const [pointTableProjectId] = useState(() => typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("point-table") : null);
   const pointTableOnly = Boolean(pointTableProjectId);
   const stageRef = useRef<HTMLDivElement>(null);
@@ -486,6 +501,7 @@ export default function ScubaMapMaker() {
   const syncChannel = useRef<BroadcastChannel | null>(null);
   const pointTableWindow = useRef<Window | null>(null);
   const projectRef = useRef<Project | null>(null);
+  const floatingTextEditStart = useRef<Project | null>(null);
   const featureDraftRef = useRef<FeatureDraft | null>(null);
   const finishFeatureDrawingRef = useRef<() => void>(() => undefined);
   const windowId = useRef(id());
@@ -772,6 +788,7 @@ export default function ScubaMapMaker() {
   const selected = project?.waypoints.find((point) => point.id === selectedId) ?? null;
   const pendingDeletePoint = project?.waypoints.find((point) => point.id === pendingDeletePointId) ?? null;
   const selectedFeature = project?.geographicFeatures.find((feature) => feature.id === selectedFeatureId) ?? null;
+  const selectedFloatingText = project?.floatingTexts.find((item) => item.id === selectedFeatureId) ?? null;
   const selectedRouteVertex = project?.routeVertices.find((vertex) => vertex.id === selectedRouteVertexId) ?? null;
   const selectedVector = project?.vectors.find((vector) => vector.id === selectedVectorId) ?? null;
   const routes = project?.routes ?? [];
@@ -964,6 +981,18 @@ export default function ScubaMapMaker() {
       setActivePanel("survey");
     }
   };
+  const selectFloatingText = (textId: string, openDrawer = true) => {
+    setSelectedFeatureId(textId);
+    setSelectedId(null);
+    setSelectedVectorId(null);
+    setSelectedRouteId(null);
+    setSelectedRouteVertexId(null);
+    setTool("select");
+    if (openDrawer) {
+      setSurveyTab("features");
+      setActivePanel("survey");
+    }
+  };
   const openFeatureModePicker = () => {
     setRouteDraft(null);
     setRouteDraftPointer(null);
@@ -972,7 +1001,34 @@ export default function ScubaMapMaker() {
     setTool("select");
     setActivePanel(null);
     setFeatureModePickerOpen(true);
-    setNotice("Choose how to draw a geographic map feature.");
+    setNotice("Choose a line-drawing mode or add floating text.");
+  };
+  const beginFloatingTextPlacement = () => {
+    setRouteDraft(null);
+    setRouteDraftPointer(null);
+    replaceFeatureDraft(null);
+    setFeatureDraftPointer(null);
+    setFeatureModePickerOpen(false);
+    setTool("text");
+    setActivePanel(null);
+    setSelectedId(null);
+    setSelectedVectorId(null);
+    setSelectedRouteId(null);
+    setSelectedRouteVertexId(null);
+    setSelectedFeatureId(null);
+    setNotice("Click the map where the floating text should appear.");
+  };
+  const addFloatingText = (position: { x: number; y: number }) => {
+    const textId = id();
+    mutate((current) => {
+      current.floatingTexts.push({ id: textId, text: "Text", x: position.x, y: position.y, size: DEFAULT_FLOATING_TEXT_SIZE, rotation: 0 });
+      return current;
+    });
+    setTool("select");
+    setSelectedFeatureId(textId);
+    setSurveyTab("features");
+    setActivePanel("survey");
+    setNotice("Floating text added. Edit its words, size, and rotation in Features.");
   };
   const beginFeatureDrawing = (mode: GeographicFeatureMode, redrawFeatureId?: string) => {
     const redrawFeature = redrawFeatureId ? project?.geographicFeatures.find((feature) => feature.id === redrawFeatureId) : undefined;
@@ -1082,6 +1138,7 @@ export default function ScubaMapMaker() {
     }
     if (tool === "coast" && project.shoreLocked) { setTool("select"); setNotice("The shoreline is locked. Unlock it to draw or adjust the coast."); return; }
     if (tool === "coast") { mutate((current) => { current.coastline.push({ id: id(), ...position }); return current; }); setNotice("Shoreline vertex added. Keep clicking to trace the coast."); return; }
+    if (tool === "text") { addFloatingText(position); return; }
     if (tool === "route") {
       const snapped = snapRoutePoint(project, position);
       setRouteDraft((draft) => {
@@ -1183,6 +1240,20 @@ export default function ScubaMapMaker() {
       activeDrag.y = event.clientY;
       return;
     }
+    if (activeDrag.kind === "floatingText" && activeDrag.id) {
+      const dx = (event.clientX - activeDrag.x) / zoom;
+      const dy = (event.clientY - activeDrag.y) / zoom;
+      if (Math.hypot(dx, dy) <= 1e-6) return;
+      activeDrag.changed = true;
+      mutate((current) => {
+        const textIndex = current.floatingTexts.findIndex((item) => item.id === activeDrag.id);
+        if (textIndex >= 0) current.floatingTexts[textIndex] = translateFloatingText(current.floatingTexts[textIndex], dx, dy, normalizeCanvasSize(current.canvasSize));
+        return current;
+      }, false);
+      activeDrag.x = event.clientX;
+      activeDrag.y = event.clientY;
+      return;
+    }
     if (activeDrag.kind === "featureAnchor" && activeDrag.id && activeDrag.pointId) {
       const feature = project.geographicFeatures.find((candidate) => candidate.id === activeDrag.id);
       const anchor = feature?.points.find((point) => point.id === activeDrag.pointId);
@@ -1233,6 +1304,11 @@ export default function ScubaMapMaker() {
       return;
     }
     const original = activeDrag.start; const kind = activeDrag.kind; let changed = activeDrag.changed; drag.current = null;
+    if (kind === "floatingText" && event.type === "pointercancel") {
+      update(original, false);
+      setNotice("Floating text move canceled.");
+      return;
+    }
     if (kind === "canvasResize") {
       setCanvasResizeActive(false);
       if (event.type === "pointercancel") {
@@ -1262,13 +1338,14 @@ export default function ScubaMapMaker() {
       }
     }
     if (kind === "annotation" && !changed) return;
-    if ((kind === "waypoint" || kind === "routeVertex" || kind === "feature" || kind === "featureAnchor" || kind === "coast") && !changed) return;
+    if ((kind === "waypoint" || kind === "routeVertex" || kind === "feature" || kind === "featureAnchor" || kind === "floatingText" || kind === "coast") && !changed) return;
     if (kind === "waypoint" || kind === "routeVertex") mutate((current) => reconcileRouteTopology(current), false);
     if (kind !== "pan") { setUndoStack((items) => [...items.slice(-29), original]); setRedoStack([]); }
     if (kind === "printAreaDraw") { setTool("select"); setNotice("Print area set. Drag its center or corners to refine it, then print the selected area."); }
     if (kind === "annotation") setNotice("Label position saved. Use the point inspector to reset it.");
     if (kind === "feature") setNotice("Map feature moved.");
     if (kind === "featureAnchor") setNotice("Feature anchor moved.");
+    if (kind === "floatingText") setNotice("Floating text moved.");
     if (kind === "canvasResize") setNotice(`Canvas resized to ${canvasSize.width} × ${canvasSize.height} px.`);
   };
   const onStageWheel = (event: WheelEvent<HTMLDivElement>) => {
@@ -1304,6 +1381,31 @@ export default function ScubaMapMaker() {
     event.currentTarget.setPointerCapture(event.pointerId);
     drag.current = { kind: "featureAnchor", id: featureId, pointId, start: clone(project), x: event.clientX, y: event.clientY };
     selectGeographicFeature(featureId, false);
+  };
+  const startFloatingTextDrag = (event: PointerEvent<HTMLButtonElement>, textId: string) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!project || event.button !== 0 || !event.isPrimary) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    drag.current = { kind: "floatingText", id: textId, start: clone(project), x: event.clientX, y: event.clientY };
+    selectFloatingText(textId);
+  };
+  const nudgeFloatingText = (event: ReactKeyboardEvent<HTMLButtonElement>, textId: string) => {
+    const direction: Record<string, { x: number; y: number }> = {
+      ArrowUp: { x: 0, y: -1 }, ArrowDown: { x: 0, y: 1 }, ArrowLeft: { x: -1, y: 0 }, ArrowRight: { x: 1, y: 0 },
+    };
+    const delta = direction[event.key];
+    if (!delta) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const step = (event.shiftKey ? 10 : 1) / zoom;
+    mutate((current) => {
+      const textIndex = current.floatingTexts.findIndex((item) => item.id === textId);
+      if (textIndex >= 0) current.floatingTexts[textIndex] = translateFloatingText(current.floatingTexts[textIndex], delta.x * step, delta.y * step, normalizeCanvasSize(current.canvasSize));
+      return current;
+    });
+    selectFloatingText(textId, false);
+    setNotice("Floating text nudged.");
   };
   const nudgeFeatureAnchor = (event: ReactKeyboardEvent<HTMLButtonElement>, featureId: string, pointId: string) => {
     const direction: Record<string, { x: number; y: number }> = {
@@ -1406,6 +1508,46 @@ export default function ScubaMapMaker() {
     });
     setSelectedFeatureId(null);
     setNotice("Map feature deleted.");
+  };
+  const beginFloatingTextEdit = () => {
+    const current = projectRef.current ?? project;
+    if (current && !floatingTextEditStart.current) floatingTextEditStart.current = clone(current);
+  };
+  const finishFloatingTextEdit = (textId: string) => {
+    const original = floatingTextEditStart.current;
+    floatingTextEditStart.current = null;
+    const current = projectRef.current ?? project;
+    if (!original || !current || original.id !== current.id) return;
+    const before = original.floatingTexts.find((item) => item.id === textId);
+    const after = current.floatingTexts.find((item) => item.id === textId);
+    if (floatingTextEqual(before, after)) return;
+    setUndoStack((items) => [...items.slice(-29), original]);
+    setRedoStack([]);
+  };
+  const updateFloatingText = (textId: string, transform: (item: FloatingText) => FloatingText, record = false) => {
+    const current = projectRef.current ?? project;
+    if (!current) return;
+    const textIndex = current.floatingTexts.findIndex((item) => item.id === textId);
+    if (textIndex < 0) return;
+    const nextItem = transform({ ...current.floatingTexts[textIndex] });
+    if (floatingTextEqual(current.floatingTexts[textIndex], nextItem)) return;
+    if (!record) {
+      if (!floatingTextEditStart.current) floatingTextEditStart.current = clone(current);
+      setRedoStack([]);
+    }
+    const next = clone(current);
+    next.floatingTexts[textIndex] = nextItem;
+    update(next, record);
+  };
+  const deleteFloatingText = (textId: string) => {
+    const item = project?.floatingTexts.find((candidate) => candidate.id === textId);
+    if (!item || !window.confirm(`Delete “${item.text.split("\n")[0] || "Text"}” from this map?`)) return;
+    mutate((current) => {
+      current.floatingTexts = current.floatingTexts.filter((candidate) => candidate.id !== textId);
+      return current;
+    });
+    setSelectedFeatureId(null);
+    setNotice("Floating text deleted.");
   };
   const redrawFreehandFeature = (featureId: string) => beginFeatureDrawing("freehand", featureId);
   const selectVector = (vector: Vector) => {
@@ -2026,6 +2168,18 @@ export default function ScubaMapMaker() {
     "--print-feature-name-width": `${150 / effectivePrintScale}px`,
     "--print-feature-name-offset": `${10 / effectivePrintScale}px`,
   }) as CSSProperties;
+  const floatingTextStyle = (item: FloatingText, scale: number) => ({
+    left: item.x,
+    top: item.y,
+    "--floating-text-font-size": `${item.size / scale}px`,
+    "--floating-text-hit-size": `${44 / scale}px`,
+    "--floating-text-max-width": `${320 / scale}px`,
+    "--floating-text-padding-y": `${7 / scale}px`,
+    "--floating-text-padding-x": `${9 / scale}px`,
+    "--floating-text-border": `${2 / scale}px`,
+    "--floating-text-radius": `${4 / scale}px`,
+    "--floating-text-angle": `${item.rotation}deg`,
+  }) as CSSProperties;
   const routeNetworkStyle = { "--route-width": `${2 / zoom}px`, "--route-selected-width": `${3 / zoom}px`, "--route-selected-path-width": `${5 / zoom}px`, "--route-chevron-width": `${2 / zoom}px`, "--route-branch-radius": `${1 / zoom}px`, "--route-symbol-cutout-radius": `${30 * pointSymbolScale / pointVisualScale}px`, "--print-route-width": `${2 / effectivePrintScale}px`, "--print-route-branch-radius": `${1 / effectivePrintScale}px`, "--print-route-symbol-cutout-radius": `${20 * pointSymbolScale / effectivePrintScale}px` } as CSSProperties;
   const selectedDirectionPath = selectedRouteLine ? directionChevronPath(selectedRouteLine, zoom) : "";
   const routeDraftPath = routeDraft && routeDraft.points.length > 1 ? routeDraft.points.map((point, index) => `${index ? "L" : "M"}${point.x} ${point.y}`).join(" ") : "";
@@ -2041,6 +2195,7 @@ export default function ScubaMapMaker() {
   const toolDockStyle = dockPosition ? { "--tool-dock-left": `${dockPosition.left}px`, "--tool-dock-top": `${dockPosition.top}px` } as CSSProperties : undefined;
   const printAreaDisplayStyle = { "--print-area-stroke": `${2 / zoom}px`, "--print-area-dash": `${8 / zoom}px`, "--print-area-dash-gap": `${6 / zoom}px`, "--print-area-label-top": `${-2 / zoom}px`, "--print-area-label-padding-y": `${4 / zoom}px`, "--print-area-label-padding-x": `${7 / zoom}px`, "--print-area-label-font": `${10 / zoom}px`, "--print-area-handle-size": `${14 / zoom}px`, "--print-area-handle-offset": `${-8 / zoom}px`, "--print-area-focus-width": `${2 / zoom}px`, "--print-area-focus-offset": `${2 / zoom}px` } as CSSProperties;
   const annotationDisplayStyle = { "--annotation-hit-width": `${44 / pointVisualScale}px`, "--annotation-hit-height": `${18 / pointVisualScale}px`, "--annotation-touch-hit": `${44 / zoom}px`, "--annotation-manual-hit": `${44 / zoom}px`, "--annotation-stack-x": `${28 / pointVisualScale}px`, "--annotation-touch-x": `${28 / zoom}px`, "--annotation-padding-x": `${3 / pointVisualScale}px`, "--annotation-padding-y": `${1 / pointVisualScale}px`, "--annotation-radius": `${3 / pointVisualScale}px`, "--annotation-label-size": `${13 / pointVisualScale}px`, "--annotation-detail-size": `${10 / pointVisualScale}px`, "--annotation-focus-width": `${1.5 / pointVisualScale}px`, "--point-leader-width": `${1 / pointVisualScale}px`, "--print-point-leader-width": `${1.15 / effectivePrintScale}px` } as CSSProperties;
+  const mapFeatureCount = project.geographicFeatures.length + project.floatingTexts.length;
   const pointLedger = (
     <section className="point-ledger">
       <div className="point-ledger-heading">
@@ -2106,6 +2261,18 @@ export default function ScubaMapMaker() {
     <label className="feature-closed-field">Closed loop<input className="switch" type="checkbox" checked={selectedFeature.closed} disabled={selectedFeature.points.length < 3} onChange={(event) => updateGeographicFeature(selectedFeature.id, (feature) => ({ ...feature, closed: event.target.checked && feature.points.length >= 3 }), true)}/></label>
     <p className="drawer-copy">{selectedFeature.mode === "freehand" ? "Drag the selected stroke to move it, or redraw its geometry." : "Drag the line to move it. Drag its anchors for precise editing."}</p>
     <div className="feature-editor-actions">{selectedFeature.mode === "freehand" && <button onClick={() => redrawFreehandFeature(selectedFeature.id)}>Redraw freehand</button>}<button className="danger-button" onClick={() => deleteGeographicFeature(selectedFeature.id)}>Delete feature</button></div>
+  </section> : selectedFloatingText ? <section className="feature-inspector floating-text-inspector" aria-label="Floating text details">
+    <h3>Floating text</h3>
+    <label>Text<textarea aria-label="Floating text content" maxLength={MAX_FLOATING_TEXT_LENGTH} value={selectedFloatingText.text} onFocus={beginFloatingTextEdit} onChange={(event) => updateFloatingText(selectedFloatingText.id, (item) => ({ ...item, text: event.target.value }))} onBlur={() => { updateFloatingText(selectedFloatingText.id, (item) => ({ ...item, text: normalizeFloatingTextContent(item.text) })); finishFloatingTextEdit(selectedFloatingText.id); }}/></label>
+    <div className="feature-style-grid floating-text-number-grid">
+      <label>Text size (px)<input aria-label="Floating text size value" type="number" min={MIN_FLOATING_TEXT_SIZE} max={MAX_FLOATING_TEXT_SIZE} step="1" value={selectedFloatingText.size} onFocus={beginFloatingTextEdit} onChange={(event) => updateFloatingText(selectedFloatingText.id, (item) => ({ ...item, size: normalizeFloatingTextSize(Number(event.target.value)) }))} onBlur={() => finishFloatingTextEdit(selectedFloatingText.id)}/></label>
+      <label>Rotation (°)<input aria-label="Floating text rotation value" type="number" min="-180" max="180" step="1" value={selectedFloatingText.rotation} onFocus={beginFloatingTextEdit} onChange={(event) => updateFloatingText(selectedFloatingText.id, (item) => ({ ...item, rotation: normalizeFloatingTextRotation(Number(event.target.value)) }))} onBlur={() => finishFloatingTextEdit(selectedFloatingText.id)}/></label>
+    </div>
+    <label><span className="range-label"><span>Text size</span><output htmlFor="floating-text-size">{selectedFloatingText.size} px</output></span><input id="floating-text-size" aria-label="Floating text size" type="range" min={MIN_FLOATING_TEXT_SIZE} max={MAX_FLOATING_TEXT_SIZE} step="1" value={selectedFloatingText.size} onPointerDown={beginFloatingTextEdit} onFocus={beginFloatingTextEdit} onChange={(event) => updateFloatingText(selectedFloatingText.id, (item) => ({ ...item, size: normalizeFloatingTextSize(Number(event.target.value)) }))} onPointerUp={() => finishFloatingTextEdit(selectedFloatingText.id)} onBlur={() => finishFloatingTextEdit(selectedFloatingText.id)}/></label>
+    <label><span className="range-label"><span>Rotation</span><output htmlFor="floating-text-rotation">{selectedFloatingText.rotation}°</output></span><input id="floating-text-rotation" aria-label="Floating text rotation" type="range" min="-180" max="180" step="1" value={selectedFloatingText.rotation} onPointerDown={beginFloatingTextEdit} onFocus={beginFloatingTextEdit} onChange={(event) => updateFloatingText(selectedFloatingText.id, (item) => ({ ...item, rotation: normalizeFloatingTextRotation(Number(event.target.value)) }))} onPointerUp={() => finishFloatingTextEdit(selectedFloatingText.id)} onBlur={() => finishFloatingTextEdit(selectedFloatingText.id)}/></label>
+    <button className="secondary-button full-width" onClick={() => updateFloatingText(selectedFloatingText.id, (item) => ({ ...item, rotation: 0 }), true)}>Reset rotation</button>
+    <p className="drawer-copy">Drag the text on the map to move it. Its chosen size stays constant while the map zoom changes.</p>
+    <div className="feature-editor-actions"><button className="danger-button" onClick={() => deleteFloatingText(selectedFloatingText.id)}>Delete text</button></div>
   </section> : null;
 
   return (
@@ -2131,7 +2298,7 @@ export default function ScubaMapMaker() {
             <div><span>Soundings dive chart</span><h1>{project.title}</h1></div>
             <time dateTime={project.date}>{formatProjectDate(project.date)}</time>
           </div>
-        <div className={`map-stage ${tool === "select" ? "pan-ready" : ""}${tool === "route" ? " route-draw-active" : ""}${tool === "feature" ? " feature-draw-active" : ""}${printArea ? " has-print-area" : ""}${smartCalloutsActive ? " smart-callout-mode" : ""}${smartCalloutOverflowIds.length ? " smart-callout-overflow" : ""}`} style={printStageStyle} ref={stageRef} tabIndex={0} aria-label="Map navigation surface. Drag blank map space to pan; scroll to zoom; use arrow keys to move around." onPointerDown={onStagePointerDown} onPointerMove={onStagePointerMove} onPointerUp={onStagePointerUp} onPointerCancel={onStagePointerUp} onWheel={onStageWheel}>
+        <div className={`map-stage ${tool === "select" ? "pan-ready" : ""}${tool === "route" ? " route-draw-active" : ""}${tool === "feature" ? " feature-draw-active" : ""}${tool === "text" ? " text-placement-active" : ""}${printArea ? " has-print-area" : ""}${smartCalloutsActive ? " smart-callout-mode" : ""}${smartCalloutOverflowIds.length ? " smart-callout-overflow" : ""}`} style={printStageStyle} ref={stageRef} tabIndex={0} aria-label="Map navigation surface. Drag blank map space to pan; scroll to zoom; use arrow keys to move around." onPointerDown={onStagePointerDown} onPointerMove={onStagePointerMove} onPointerUp={onStagePointerUp} onPointerCancel={onStagePointerUp} onWheel={onStageWheel}>
           <div className="print-map-viewport">
             <div className="map-canvas" style={{ ...printMapDisplayStyle, ...canvasDisplayStyle, transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}>
             <div className="water-label">{project.title.trim().toUpperCase()}</div>
@@ -2229,6 +2396,10 @@ export default function ScubaMapMaker() {
               <button className={`feature-name-label print-hidden${visibleLayers.geographicFeatureLabels ? "" : " screen-hidden"}`} style={featureNameLabelStyle(anchor)} aria-label={`Map feature ${name}`} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); selectGeographicFeature(feature.id); }}><span>{name}</span></button>
               {pointInPrintArea(anchor, printArea) && <span className={`feature-name-label feature-name-label-print screen-hidden${printFeatureLabelBelow(anchor, featureLabelIndex) ? " feature-name-label-below" : ""}${exportClass(printSettings.geographicFeatureLabels)}`} style={featureNameLabelStyle(clampPrintLabelAnchor(anchor, 84, 60))} aria-label={`Map feature ${name}`}><span>{name}</span></span>}
             </Fragment>)}
+            {project.floatingTexts.map((item) => <Fragment key={item.id}>
+              <button data-floating-text-id={item.id} className={`floating-text-item floating-text-screen print-hidden${selectedFeatureId === item.id ? " selected" : ""}${visibleLayers.floatingText ? "" : " screen-hidden"}`} style={floatingTextStyle(item, zoom)} aria-label={`Move floating text: ${item.text}. Use arrow keys for fine positioning.`} onPointerDown={(event) => startFloatingTextDrag(event, item.id)} onClick={(event) => { event.stopPropagation(); selectFloatingText(item.id); }} onKeyDown={(event) => nudgeFloatingText(event, item.id)}><span>{item.text || "Text"}</span></button>
+              <span className={`floating-text-item floating-text-print screen-hidden${exportClass(printSettings.floatingText && pointInPrintArea(item, printArea))}`} style={floatingTextStyle(item, effectivePrintScale)} aria-label={`Floating text: ${item.text}`}><span>{item.text || "Text"}</span></span>
+            </Fragment>)}
             {manualAnnotations.length > 0 && <svg className="point-leaders" style={annotationDisplayStyle} viewBox={`0 0 ${canvasSize.width} ${canvasSize.height}`} shapeRendering="geometricPrecision" aria-hidden="true">
               {manualAnnotations.map(({ point, annotationKind, offset }) => {
                 const screenEnd = annotationPosition(point, offset);
@@ -2282,7 +2453,7 @@ export default function ScubaMapMaker() {
               </Fragment>;
             })}
             <div className={`north-arrow map-furniture${exportClass(printSettings.mapFurniture)}`}><b>N</b><svg viewBox="0 0 34 56" aria-hidden="true"><path d="M17 2 31 46 17 39 3 46 17 2Z"/><path d="m17 2 14 44-14-7V2Z"/></svg></div><div className={`scale-bar map-furniture${exportClass(printSettings.mapFurniture)}`}><i style={{ width: mapBar.sourcePixels }}/><span>{formatNumber(mapBar.value)} {project.distanceUnit}</span></div><div className={`map-units map-furniture${exportClass(printSettings.mapFurniture)}`}>distance: {UNIT_LABEL[project.distanceUnit]} · depth: {UNIT_LABEL[project.depthUnit]}</div>
-            {(tool === "route" || tool === "point" || tool === "feature") && <div className="map-placement-capture print-hidden" aria-hidden="true"/>}
+            {(tool === "route" || tool === "point" || tool === "feature" || tool === "text") && <div className="map-placement-capture print-hidden" aria-hidden="true"/>}
             </div>
           </div>
           {smartCalloutCandidate && <>
@@ -2313,6 +2484,7 @@ export default function ScubaMapMaker() {
             <p>Draw a map feature</p>
             <div className="feature-mode-grid">
               <button onClick={() => beginFeatureDrawing("freehand")}><SoundingsIcon name="feature"/>Freehand</button>
+              <button onClick={beginFloatingTextPlacement}><SoundingsIcon name="text"/>Floating text</button>
               <button onClick={() => beginFeatureDrawing("spline")}><SoundingsIcon name="feature"/>Smooth spline</button>
               <button onClick={() => beginFeatureDrawing("polyline")}><SoundingsIcon name="feature"/>Connected line</button>
             </div>
@@ -2334,7 +2506,7 @@ export default function ScubaMapMaker() {
             <DockButton icon="select" label="Select" active={tool === "select" && activePanel !== "survey"} onClick={() => { setTool("select"); setActivePanel(null); }}/>
             <DockButton icon="point" label="Add a Point" active={tool === "point"} onClick={beginPointPlacement}/>
             <DockButton icon="shoreline" label="Shoreline" active={tool === "coast"} disabled={project.shoreLocked} onClick={() => { setTool("coast"); setActivePanel(null); }}/>
-            <DockButton icon="feature" label="Draw Feature" active={tool === "feature" || featureModePickerOpen} onClick={openFeatureModePicker}/>
+            <DockButton icon="feature" label="Draw Feature" active={tool === "feature" || tool === "text" || featureModePickerOpen} onClick={openFeatureModePicker}/>
             <DockButton icon="route" label="Draw Route" active={tool === "route"} onClick={() => beginRouteDrawing()}/>
             <DockButton icon="print-area" label="Print Area" active={tool === "printArea"} onClick={() => { setTool("printArea"); setActivePanel(null); setNotice("Drag a rectangle over the map to set the PDF print area."); }}/>
           </nav>
@@ -2350,6 +2522,7 @@ export default function ScubaMapMaker() {
                 <p className="layer-group-title">Features</p>
                 <label><span><SoundingsIcon name="feature"/>Map features</span><input className="switch" type="checkbox" checked={visibleLayers.geographicFeatures} onChange={(event) => setVisibleLayers((layers) => ({ ...layers, geographicFeatures: event.target.checked }))}/></label>
                 <label><span className="label-glyph compact">Ab</span><span className="layer-name">Feature labels</span><input className="switch" type="checkbox" checked={visibleLayers.geographicFeatureLabels} onChange={(event) => setVisibleLayers((layers) => ({ ...layers, geographicFeatureLabels: event.target.checked }))}/></label>
+                <label><span><SoundingsIcon name="text"/>Floating text</span><input className="switch" type="checkbox" checked={visibleLayers.floatingText} onChange={(event) => setVisibleLayers((layers) => ({ ...layers, floatingText: event.target.checked }))}/></label>
                 <p className="layer-group-title">Routes</p>
                 <label><span><SoundingsIcon name="route"/>Routes</span><input className="switch" type="checkbox" checked={visibleLayers.routes} onChange={(event) => setVisibleLayers((layers) => ({ ...layers, routes: event.target.checked }))}/></label>
                 <label><span className="label-glyph">°</span><span className="layer-name">Bearings &amp; distances</span><input className="switch" type="checkbox" checked={visibleLayers.routeLabels} onChange={(event) => setVisibleLayers((layers) => ({ ...layers, routeLabels: event.target.checked }))}/></label>
@@ -2418,8 +2591,9 @@ export default function ScubaMapMaker() {
                     <div className="survey-section-title"><span>Map features</span><button onClick={openFeatureModePicker}>＋ Draw feature</button></div>
                     <ul className="feature-list" aria-label="Map features">
                       {project.geographicFeatures.map((feature, index) => <li key={feature.id}><button className={`feature-list-item${selectedFeatureId === feature.id ? " active" : ""}`} aria-selected={selectedFeatureId === feature.id} onClick={() => selectGeographicFeature(feature.id, false)}><span><b>{feature.name.trim() || `Untitled feature ${index + 1}`}</b><small>{GEOGRAPHIC_FEATURE_MODE_LABELS[feature.mode]} · {feature.closed ? "Closed" : "Open"}</small></span><i className="feature-list-swatch" aria-hidden="true" style={{ "--feature-list-color": feature.style.color, "--feature-list-width": `${feature.style.width}px`, "--feature-list-dash": featureDashArray(feature.style.dash, feature.style.width, 1) || "none" } as CSSProperties}/></button></li>)}
+                      {project.floatingTexts.map((item) => <li key={item.id}><button className={`feature-list-item${selectedFeatureId === item.id ? " active" : ""}`} aria-selected={selectedFeatureId === item.id} onClick={() => selectFloatingText(item.id, false)}><span><b>{item.text.split("\n")[0] || "Text"}</b><small>Floating text · {item.size} px · {item.rotation}°</small></span><i className="feature-list-text-swatch" aria-hidden="true">Ab</i></button></li>)}
                     </ul>
-                    {!project.geographicFeatures.length && <div className="empty-panel"><SoundingsIcon name="feature"/><h3>No map features</h3><p>Draw a freehand trace, smooth spline, or connected line without changing the shoreline or routes.</p></div>}
+                    {!mapFeatureCount && <div className="empty-panel"><SoundingsIcon name="feature"/><h3>No map features</h3><p>Draw a freehand trace, smooth spline, connected line, or floating text without changing the shoreline or routes.</p></div>}
                   </section>
                   {featureInspector}
                 </>}
@@ -2439,7 +2613,7 @@ export default function ScubaMapMaker() {
                 </div>
                 <div className="drawer-section export-settings">
                   <h3>PDF layers</h3>
-                  <div className="export-grid">{([ ["reference", "Reference image"], ["shoreline", "Shoreline"], ["geographicFeatures", "Map features"], ["geographicFeatureLabels", "Feature labels"], ["routes", "Route lines"], ["routeLabels", "Route bearings & distances"], ["routeNameLabels", "Named route labels"], ["pointMarkers", "Point markers"], ["pointNames", "Point Names (P1, P2)"], ["fullPointNames", "Names (Swim platform)"], ["depths", "Depths"], ["mapFurniture", "North arrow & scale"], ["pointTable", "Details appendix"] ] as Array<[ExportToggleKey, string]>).map(([setting, label]) => {
+                  <div className="export-grid">{([ ["reference", "Reference image"], ["shoreline", "Shoreline"], ["geographicFeatures", "Map features"], ["geographicFeatureLabels", "Feature labels"], ["floatingText", "Floating text"], ["routes", "Route lines"], ["routeLabels", "Route bearings & distances"], ["routeNameLabels", "Named route labels"], ["pointMarkers", "Point markers"], ["pointNames", "Point Names (P1, P2)"], ["fullPointNames", "Names (Swim platform)"], ["depths", "Depths"], ["mapFurniture", "North arrow & scale"], ["pointTable", "Details appendix"] ] as Array<[ExportToggleKey, string]>).map(([setting, label]) => {
                     const disabled = (setting === "routeLabels" || setting === "routeNameLabels") ? !exportSettings.routes : setting === "geographicFeatureLabels" ? !exportSettings.geographicFeatures : false;
                     return <label className={disabled ? "dependent-disabled" : ""} key={setting}><input type="checkbox" checked={exportSettings[setting]} disabled={disabled} onChange={(event) => setExportSetting(setting, event.target.checked)}/>{label}</label>;
                   })}</div>
@@ -2464,7 +2638,7 @@ export default function ScubaMapMaker() {
 
           {visibleLayers.mapFurniture && <><div className="screen-north print-hidden"><b>N</b><svg viewBox="0 0 34 56" aria-hidden="true"><path d="M17 2 31 46 17 39 3 46 17 2Z"/><path d="m17 2 14 44-14-7V2Z"/></svg></div><div className="screen-scale print-hidden" style={{ "--screen-scale-bar-width": `${screenBar.printedPixels}px` } as CSSProperties}><div className="scale-labels"><span>0</span><span>{formatScaleNumber(screenBar.value / 2)}</span><span>{formatScaleNumber(screenBar.value)} {project.distanceUnit}</span></div><i/></div></>}
           <div className="zoom-controls print-hidden"><button aria-label="Zoom out" onClick={() => changeMapZoom(1 / 1.25)}>−</button><span>{Math.round(zoom * 100)}%</span><button aria-label="Zoom in" onClick={() => changeMapZoom(1.25)}>＋</button><button className="recenter-button" aria-label="Recenter map" onClick={fitEntireMapToStage}><SoundingsIcon name="recenter"/></button></div>
-          <div className="map-readout print-hidden"><span>{formatNumber(mapScale(project))} m / px</span><span>{project.waypoints.length} {project.waypoints.length === 1 ? "point" : "points"}</span><span>{routes.length} {routes.length === 1 ? "route" : "routes"}</span><span>{project.geographicFeatures.length} {project.geographicFeatures.length === 1 ? "feature" : "features"}</span></div>
+          <div className="map-readout print-hidden"><span>{formatNumber(mapScale(project))} m / px</span><span>{project.waypoints.length} {project.waypoints.length === 1 ? "point" : "points"}</span><span>{routes.length} {routes.length === 1 ? "route" : "routes"}</span><span>{mapFeatureCount} {mapFeatureCount === 1 ? "feature" : "features"}</span></div>
         </div>
           <div className="print-sheet-footer"><span>Distance: {UNIT_LABEL[project.distanceUnit]} · Depth: {UNIT_LABEL[project.depthUnit]}</span><span>Calibration: {formatNumber(mapScale(project))} m per map px</span></div>
         </section>
