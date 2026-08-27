@@ -2,7 +2,8 @@
 
 import { CSSProperties, ChangeEvent, Fragment, KeyboardEvent as ReactKeyboardEvent, PointerEvent, WheelEvent, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { DEFAULT_CANVAS_SIZE, MAX_CANVAS_DIMENSION, normalizeCanvasSize, protectedCanvasResizeMinimum, type CanvasSize } from "./canvas-size";
-import { clampDockPosition, DEFAULT_MAP_PAN, DEFAULT_MAP_ZOOM, fitMapView, type DockPosition } from "./map-view";
+import { clampDockPosition, DEFAULT_MAP_PAN, DEFAULT_MAP_ZOOM, fitMapView, pointVisualZoom, type DockPosition } from "./map-view";
+import { calibrationReferenceIsCurrent, isFinitePositive, metersPerPixel, routePixelLength, segmentPixelLength, type CalibrationSourceMode } from "./calibration";
 import { SoundingsIcon, type SoundingsIconName } from "./soundings-icons";
 import { DEFAULT_POINT_SYMBOL_SCALE, MAX_POINT_SYMBOL_SCALE, MIN_POINT_SYMBOL_SCALE, POINT_SYMBOLS, normalizePointSymbol, normalizePointSymbolScale, pointSymbolDefinition, type PointSymbolId } from "./point-symbols";
 import {
@@ -81,7 +82,7 @@ type Vector = { id: string; fromId: string; toId: string; bearing: number; dista
 type CoastPoint = { id: string; x: number; y: number };
 type PrintArea = { x: number; y: number; width: number; height: number };
 type ReferenceImage = { dataUrl?: string; opacity: number; scale: number; x: number; y: number; visible: boolean; locked: boolean; frame?: CanvasSize };
-type Calibration = { vectorId?: string; distance?: number; unit?: Unit; metersPerPixel: number };
+type Calibration = { routeId?: string; vectorId?: string; distance?: number; unit?: Unit; metersPerPixel: number };
 type Project = {
   version: 2; id: string; title: string; date: string; notes: string; distanceUnit: Unit; depthUnit: Unit;
   coastline: CoastPoint[]; shoreLocked?: boolean; geographicFeatures: GeographicFeature[]; waypoints: Point[]; routeVertices: RouteVertex[]; vectors: Vector[]; routes?: SavedRoute[]; reference: ReferenceImage; calibration?: Calibration; exportSettings?: ExportSettings; printArea?: PrintArea; pointSymbolScale?: number; canvasSize?: CanvasSize;
@@ -196,13 +197,26 @@ function projectedPointOnSegment(point: { x: number; y: number }, start: { x: nu
   const y = start.y + dy * t;
   return { x, y, t, distance: Math.hypot(point.x - x, point.y - y) };
 }
-function mapScale(project: Project) { return project.calibration?.metersPerPixel && project.calibration.metersPerPixel > 0 ? project.calibration.metersPerPixel : DEFAULT_METERS_PER_PIXEL; }
+function mapScale(project: Project) { return isFinitePositive(project.calibration?.metersPerPixel) ? project.calibration.metersPerPixel : DEFAULT_METERS_PER_PIXEL; }
 function geometry(project: Project, vector: Vector) {
   const nodes = routeNodes(project);
   const start = nodes.find((point) => point.id === vector.fromId);
   const end = nodes.find((point) => point.id === vector.toId);
   if (!start || !end) return null;
   return { start, end, dx: end.x - start.x, dy: end.y - start.y, pixels: Math.hypot(end.x - start.x, end.y - start.y) };
+}
+function normalizedCalibration(project: Project): Calibration {
+  const metersPerSourcePixel = mapScale(project);
+  const calibration = project.calibration;
+  if (!calibration || !isFinitePositive(calibration.distance) || !calibration.unit || !(calibration.unit in METERS_PER_UNIT)) {
+    return { metersPerPixel: metersPerSourcePixel };
+  }
+  if (!calibrationReferenceIsCurrent(calibration, project.routes ?? [], project.vectors, routeNodes(project))) {
+    return { metersPerPixel: metersPerSourcePixel };
+  }
+  return calibration.routeId
+    ? { routeId: calibration.routeId, distance: calibration.distance, unit: calibration.unit, metersPerPixel: metersPerSourcePixel }
+    : { vectorId: calibration.vectorId, distance: calibration.distance, unit: calibration.unit, metersPerPixel: metersPerSourcePixel };
 }
 function routePathData(path: RoutePath, pointById: ReadonlyMap<string, RouteNode>) {
   const commands = path.pointIds.map((pointId, index) => {
@@ -231,6 +245,7 @@ function directionChevronPath(line: NonNullable<ReturnType<typeof geometry>>, zo
 }
 function synchronizeVectors(project: Project) {
   const metersPerPixel = mapScale(project);
+  project.calibration = normalizedCalibration(project);
   project.vectors.forEach((vector) => {
     const line = geometry(project, vector);
     if (!line) return;
@@ -439,6 +454,7 @@ export default function ScubaMapMaker() {
   const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null);
   const [selectedRouteVertexId, setSelectedRouteVertexId] = useState<string | null>(null);
   const [pendingDeletePointId, setPendingDeletePointId] = useState<string | null>(null);
+  const [calibrationMode, setCalibrationMode] = useState<CalibrationSourceMode>("segment");
   const [calibrationForm, setCalibrationForm] = useState({ distance: "", unit: "ft" as Unit });
   const [notice, setNotice] = useState("Loading local map library…");
   const [activePanel, setActivePanel] = useState<ActivePanel>(null);
@@ -777,14 +793,27 @@ export default function ScubaMapMaker() {
   const mutate = (fn: (current: Project) => Project, record = true) => project && update(fn(clone(project)), record);
   const routeFallbackName = (route: SavedRoute) => `Unnamed route ${Math.max(1, routes.findIndex((item) => item.id === route.id) + 1)}`;
   const routeDisplayName = (route: SavedRoute) => route.name.trim() || routeFallbackName(route);
+  const distanceForSourcePixels = (pixels: number | undefined, unit: Unit) => project && isFinitePositive(pixels)
+    ? (pixels * mapScale(project)) / METERS_PER_UNIT[unit]
+    : undefined;
+  const populateCalibrationForm = (pixels: number | undefined, unit: Unit = project?.distanceUnit ?? "ft") => {
+    const distance = distanceForSourcePixels(pixels, unit);
+    setCalibrationForm({ distance: distance === undefined ? "" : String(Number(distance.toPrecision(8))), unit });
+  };
   const focusRoute = (route: SavedRoute, openDrawer = true, vectorId?: string) => {
     setSelectedRouteId(route.id);
     setSelectedFeatureId(null);
-    const nextVectorId = vectorId && route.steps.some((step) => step.vectorId === vectorId) ? vectorId : route.steps[0]?.vectorId;
-    setSelectedVectorId(nextVectorId ?? null);
-    if (nextVectorId && project) {
-      const vector = project.vectors.find((item) => item.id === nextVectorId);
-      if (vector) setCalibrationForm({ distance: String(vector.distance), unit: vector.unit });
+    const nextVector = vectorId && route.steps.some((step) => step.vectorId === vectorId)
+      ? project?.vectors.find((item) => item.id === vectorId)
+      : undefined;
+    const nextMode: CalibrationSourceMode = nextVector ? "segment" : "route";
+    setCalibrationMode(nextMode);
+    setSelectedVectorId(nextVector?.id ?? null);
+    if (project) {
+      const pixels = nextVector
+        ? segmentPixelLength(nextVector, routeNodes(project))
+        : routePixelLength(route, project.vectors, routeNodes(project));
+      populateCalibrationForm(pixels, project.distanceUnit);
     }
     if (openDrawer) {
       const endpoints = routeEndpoints(route, project?.vectors ?? []);
@@ -794,6 +823,9 @@ export default function ScubaMapMaker() {
       setSurveyTab("routes");
       setActivePanel("survey");
     }
+    setNotice(nextVector
+      ? `${routeDisplayName(route)} segment selected as the calibration reference.`
+      : `${routeDisplayName(route)} selected as the whole-route calibration reference.`);
   };
   const commitRouteName = (routeId: string, name: string) => {
     mutate((current) => {
@@ -853,7 +885,7 @@ export default function ScubaMapMaker() {
   };
   const annotationOffsetFromElement = (element: HTMLElement, point: Point) => {
     const stageRect = stageRef.current!.getBoundingClientRect();
-    const labelRect = element.getBoundingClientRect();
+    const labelRect = (element.querySelector<HTMLElement>(".point-annotation-chip") ?? element).getBoundingClientRect();
     const center = {
       x: (labelRect.left + labelRect.width / 2 - stageRect.left - pan.x) / zoom,
       y: (labelRect.top + labelRect.height / 2 - stageRect.top - pan.y) / zoom,
@@ -1374,6 +1406,7 @@ export default function ScubaMapMaker() {
   };
   const redrawFreehandFeature = (featureId: string) => beginFeatureDrawing("freehand", featureId);
   const selectVector = (vector: Vector) => {
+    setCalibrationMode("segment");
     setSelectedVectorId(vector.id);
     setSelectedId(null);
     setSelectedRouteVertexId(null);
@@ -1382,8 +1415,30 @@ export default function ScubaMapMaker() {
     setSelectedRouteId(route?.id ?? null);
     setSurveyTab("routes");
     setActivePanel("survey");
-    setCalibrationForm({ distance: String(vector.distance), unit: vector.unit });
+    populateCalibrationForm(project ? segmentPixelLength(vector, routeNodes(project)) : undefined, project?.distanceUnit ?? vector.unit);
     setNotice(route ? `${routeDisplayName(route)} selected. The clicked segment remains the calibration reference.` : "Route segment selected for calibration.");
+  };
+  const changeCalibrationMode = (mode: CalibrationSourceMode) => {
+    setCalibrationMode(mode);
+    if (!project) return;
+    if (mode === "route") {
+      const route = selectedRoute ?? routes[0];
+      if (route) focusRoute(route, false);
+      else {
+        setSelectedRouteId(null);
+        setSelectedVectorId(null);
+        populateCalibrationForm(undefined, project.distanceUnit);
+      }
+      return;
+    }
+    const vector = selectedVector
+      ?? selectedRoute?.steps.map((step) => project.vectors.find((candidate) => candidate.id === step.vectorId)).find(Boolean)
+      ?? project.vectors[0];
+    if (vector) selectVector(vector);
+    else {
+      setSelectedVectorId(null);
+      populateCalibrationForm(undefined, project.distanceUnit);
+    }
   };
   const beginRouteDrawing = (extension?: { route: SavedRoute; at: "start" | "end" }, startNode?: RouteNode) => {
     if (!project) return;
@@ -1458,16 +1513,43 @@ export default function ScubaMapMaker() {
     setTool("select");
     setSelectedRouteId(finishedRouteId);
     setSelectedVectorId(firstVectorId || null);
+    setCalibrationMode(firstVectorId ? "segment" : "route");
     setSurveyTab("routes");
     setActivePanel("survey");
     setNotice(routeDraft.extendRouteId ? "Route extended. New crossings were connected automatically." : "Route created. New crossings were connected automatically.");
   };
   const calibrateMap = () => {
-    if (!project || !selectedVector) return;
-    const distance = Number(calibrationForm.distance); if (!Number.isFinite(distance) || distance <= 0) { setNotice("Enter a positive known distance for this route line."); return; }
-    const line = geometry(project, selectedVector); if (!line || line.pixels === 0) { setNotice("Choose a route line with visible length to calibrate the map."); return; }
-    mutate((current) => { current.calibration = { vectorId: selectedVector.id, distance, unit: calibrationForm.unit, metersPerPixel: (distance * METERS_PER_UNIT[calibrationForm.unit]) / line.pixels }; return synchronizeVectors(current); });
-    setNotice(`Map scale calibrated from ${formatNumber(distance)} ${calibrationForm.unit}.`);
+    if (!project) return;
+    const distance = Number(calibrationForm.distance);
+    if (!isFinitePositive(distance)) {
+      setNotice(`Enter a positive known ${calibrationMode === "route" ? "route" : "segment"} distance.`);
+      return;
+    }
+    const sourcePixels = calibrationMode === "route" && selectedRoute
+      ? routePixelLength(selectedRoute, project.vectors, routeNodes(project))
+      : calibrationMode === "segment" && selectedVector
+        ? segmentPixelLength(selectedVector, routeNodes(project))
+        : undefined;
+    const nextScale = metersPerPixel(distance, calibrationForm.unit, sourcePixels ?? 0);
+    if (!nextScale) {
+      setNotice(`Choose a ${calibrationMode === "route" ? "route" : "segment"} with complete, visible length to calibrate the map.`);
+      return;
+    }
+    if (calibrationMode === "route" && selectedRoute) {
+      mutate((current) => {
+        current.calibration = { routeId: selectedRoute.id, distance, unit: calibrationForm.unit, metersPerPixel: nextScale };
+        return synchronizeVectors(current);
+      });
+      setNotice(`Map scale calibrated from ${routeDisplayName(selectedRoute)} at ${formatNumber(distance)} ${calibrationForm.unit}.`);
+      return;
+    }
+    if (calibrationMode === "segment" && selectedVector) {
+      mutate((current) => {
+        current.calibration = { vectorId: selectedVector.id, distance, unit: calibrationForm.unit, metersPerPixel: nextScale };
+        return synchronizeVectors(current);
+      });
+      setNotice(`Map scale calibrated from the selected segment at ${formatNumber(distance)} ${calibrationForm.unit}.`);
+    }
   };
   const updatePointLabel = (pointId: string, label: string) => {
     if (!project || label.trim() === "") return;
@@ -1850,8 +1932,8 @@ export default function ScubaMapMaker() {
     <div className="survey-route-list" aria-label="Routes">
       {routes.map((route, index) => {
         const endpoints = routeEndpoints(route, project.vectors);
-        const total = route.steps.reduce((sum, step) => sum + (project.vectors.find((vector) => vector.id === step.vectorId)?.distance ?? 0), 0);
-        return <button className={selectedRoute?.id === route.id ? "active" : ""} key={route.id} onClick={() => focusRoute(route, openDrawerForSegment)}><span>{index + 1}</span><b>{routeDisplayName(route)}</b><small>{formatNumber(total)} {project.distanceUnit} · {route.steps.length} seg</small><em>{endpoints ? `${nodeLabel(nodeMap.get(endpoints.startId))} → ${nodeLabel(nodeMap.get(endpoints.endId))}` : "Incomplete"}</em></button>;
+        const total = distanceForSourcePixels(routePixelLength(route, project.vectors, routeNodes(project)), project.distanceUnit);
+        return <button className={selectedRoute?.id === route.id ? "active" : ""} key={route.id} onClick={() => focusRoute(route, openDrawerForSegment)}><span>{index + 1}</span><b>{routeDisplayName(route)}</b><small>{total === undefined ? "Incomplete" : `${formatNumber(total)} ${project.distanceUnit}`} · {route.steps.length} seg</small><em>{endpoints ? `${nodeLabel(nodeMap.get(endpoints.startId))} → ${nodeLabel(nodeMap.get(endpoints.endId))}` : "Incomplete"}</em></button>;
       })}
       {!routes.length && <div className="empty-route-list"><b>No routes yet</b><span>Choose Draw route, then click each bend or connection on the map.</span></div>}
     </div>
@@ -1884,7 +1966,14 @@ export default function ScubaMapMaker() {
   </div>;
   const mapBar = chooseScaleBar(mapScale(project), METERS_PER_UNIT[project.distanceUnit], 1);
   const screenBar = chooseScaleBar(mapScale(project), METERS_PER_UNIT[project.distanceUnit], zoom);
+  const pointVisualScale = pointVisualZoom(zoom);
   const selectedRouteLine = selectedVector ? geometry(project, selectedVector) : null;
+  const selectedCalibrationPixels = calibrationMode === "route" && selectedRoute
+    ? routePixelLength(selectedRoute, project.vectors, routeNodes(project))
+    : calibrationMode === "segment" && selectedVector
+      ? segmentPixelLength(selectedVector, routeNodes(project))
+      : undefined;
+  const calibrationSourceReady = isFinitePositive(selectedCalibrationPixels);
   const shorelinePath = coast.length > 1 ? `${coast.map((vertex, index) => `${index ? "L" : "M"}${vertex.x} ${vertex.y}`).join(" ")}${coast.length > 2 ? " Z" : ""}` : "";
   const shoreStrokeStyle = { "--shore-base-width": `${12 / zoom}px`, "--shore-edge-width": `${2 / zoom}px`, "--print-shore-base-width": `${6 / effectivePrintScale}px`, "--print-shore-edge-width": `${1.5 / effectivePrintScale}px` } as CSSProperties;
   const shorelineHandleStyle = { "--coast-hit-size": `${44 / zoom}px`, "--coast-visual-size": `${Math.min(28, Math.max(10, 18 * zoom)) / zoom}px`, "--coast-border-width": `${Math.min(3, Math.max(1, 2 * zoom)) / zoom}px` } as CSSProperties;
@@ -1931,7 +2020,7 @@ export default function ScubaMapMaker() {
     "--print-feature-name-width": `${150 / effectivePrintScale}px`,
     "--print-feature-name-offset": `${10 / effectivePrintScale}px`,
   }) as CSSProperties;
-  const routeNetworkStyle = { "--route-width": `${2 / zoom}px`, "--route-selected-width": `${3 / zoom}px`, "--route-selected-path-width": `${5 / zoom}px`, "--route-chevron-width": `${2 / zoom}px`, "--route-branch-radius": `${1 / zoom}px`, "--route-symbol-cutout-radius": `${30 * pointSymbolScale / zoom}px`, "--print-route-width": `${2 / effectivePrintScale}px`, "--print-route-branch-radius": `${1 / effectivePrintScale}px`, "--print-route-symbol-cutout-radius": `${20 * pointSymbolScale / effectivePrintScale}px` } as CSSProperties;
+  const routeNetworkStyle = { "--route-width": `${2 / zoom}px`, "--route-selected-width": `${3 / zoom}px`, "--route-selected-path-width": `${5 / zoom}px`, "--route-chevron-width": `${2 / zoom}px`, "--route-branch-radius": `${1 / zoom}px`, "--route-symbol-cutout-radius": `${30 * pointSymbolScale / pointVisualScale}px`, "--print-route-width": `${2 / effectivePrintScale}px`, "--print-route-branch-radius": `${1 / effectivePrintScale}px`, "--print-route-symbol-cutout-radius": `${20 * pointSymbolScale / effectivePrintScale}px` } as CSSProperties;
   const selectedDirectionPath = selectedRouteLine ? directionChevronPath(selectedRouteLine, zoom) : "";
   const routeDraftPath = routeDraft && routeDraft.points.length > 1 ? routeDraft.points.map((point, index) => `${index ? "L" : "M"}${point.x} ${point.y}`).join(" ") : "";
   const routeDraftPreviewPath = routeDraft?.points.length && routeDraftPointer ? `M${routeDraft.points[routeDraft.points.length - 1].x} ${routeDraft.points[routeDraft.points.length - 1].y} L${routeDraftPointer.x} ${routeDraftPointer.y}` : "";
@@ -1942,10 +2031,10 @@ export default function ScubaMapMaker() {
     : "";
   const featureDraftStyle = { "--feature-draft-width": `${3 / zoom}px`, "--feature-preview-dash-array": `${7 / zoom}px ${6 / zoom}px` } as CSSProperties;
   const routeVertexDisplayStyle = { "--route-vertex-hit-size": `${44 / zoom}px`, "--route-vertex-size": `${10 / zoom}px`, "--route-vertex-border": `${2 / zoom}px`, "--route-vertex-halo": `${3 / zoom}px` } as CSSProperties;
-  const waypointDisplayStyle = { "--point-hit-size": `${44 / zoom}px`, "--point-dot-size": `${14 / zoom}px`, "--point-dot-border": `${2 / zoom}px`, "--point-ring": `${1 / zoom}px`, "--point-origin-ring": `${2 / zoom}px`, "--point-selected-ring": `${3 / zoom}px`, "--point-shadow": `${1 / zoom}px`, "--point-shadow-blur": `${4 / zoom}px`, "--point-symbol-size": `${38 * pointSymbolScale / zoom}px`, "--junction-size": `${10 / zoom}px`, "--junction-border": `${2 / zoom}px`, "--junction-halo": `${4 / zoom}px` } as CSSProperties;
+  const waypointDisplayStyle = { "--point-hit-size": `${44 / zoom}px`, "--point-dot-size": `${14 / pointVisualScale}px`, "--point-dot-border": `${2 / pointVisualScale}px`, "--point-ring": `${1 / pointVisualScale}px`, "--point-origin-ring": `${2 / pointVisualScale}px`, "--point-selected-ring": `${3 / pointVisualScale}px`, "--point-shadow": `${1 / pointVisualScale}px`, "--point-shadow-blur": `${4 / pointVisualScale}px`, "--point-symbol-size": `${38 * pointSymbolScale / pointVisualScale}px`, "--junction-size": `${10 / pointVisualScale}px`, "--junction-border": `${2 / pointVisualScale}px`, "--junction-halo": `${4 / pointVisualScale}px` } as CSSProperties;
   const toolDockStyle = dockPosition ? { "--tool-dock-left": `${dockPosition.left}px`, "--tool-dock-top": `${dockPosition.top}px` } as CSSProperties : undefined;
   const printAreaDisplayStyle = { "--print-area-stroke": `${2 / zoom}px`, "--print-area-dash": `${8 / zoom}px`, "--print-area-dash-gap": `${6 / zoom}px`, "--print-area-label-top": `${-2 / zoom}px`, "--print-area-label-padding-y": `${4 / zoom}px`, "--print-area-label-padding-x": `${7 / zoom}px`, "--print-area-label-font": `${10 / zoom}px`, "--print-area-handle-size": `${14 / zoom}px`, "--print-area-handle-offset": `${-8 / zoom}px`, "--print-area-focus-width": `${2 / zoom}px`, "--print-area-focus-offset": `${2 / zoom}px` } as CSSProperties;
-  const annotationDisplayStyle = { "--annotation-hit-width": `${44 / zoom}px`, "--annotation-hit-height": `${18 / zoom}px`, "--annotation-touch-hit": `${44 / zoom}px`, "--annotation-manual-hit": `${44 / zoom}px`, "--annotation-stack-x": `${28 / zoom}px`, "--annotation-padding-x": `${3 / zoom}px`, "--annotation-padding-y": `${1 / zoom}px`, "--annotation-radius": `${3 / zoom}px`, "--annotation-label-size": `${13 / zoom}px`, "--annotation-detail-size": `${10 / zoom}px`, "--annotation-focus-width": `${1.5 / zoom}px`, "--point-leader-width": `${1 / zoom}px`, "--print-point-leader-width": `${1.15 / effectivePrintScale}px` } as CSSProperties;
+  const annotationDisplayStyle = { "--annotation-hit-width": `${44 / pointVisualScale}px`, "--annotation-hit-height": `${18 / pointVisualScale}px`, "--annotation-touch-hit": `${44 / zoom}px`, "--annotation-manual-hit": `${44 / zoom}px`, "--annotation-stack-x": `${28 / pointVisualScale}px`, "--annotation-touch-x": `${28 / zoom}px`, "--annotation-padding-x": `${3 / pointVisualScale}px`, "--annotation-padding-y": `${1 / pointVisualScale}px`, "--annotation-radius": `${3 / pointVisualScale}px`, "--annotation-label-size": `${13 / pointVisualScale}px`, "--annotation-detail-size": `${10 / pointVisualScale}px`, "--annotation-focus-width": `${1.5 / pointVisualScale}px`, "--point-leader-width": `${1 / pointVisualScale}px`, "--print-point-leader-width": `${1.15 / effectivePrintScale}px` } as CSSProperties;
   const pointLedger = (
     <section className="point-ledger">
       <div className="point-ledger-heading">
@@ -2171,9 +2260,10 @@ export default function ScubaMapMaker() {
                   const position = offset ? annotationPosition(point, offset) : point;
                   const printPosition = offset ? clampPrintLabelAnchor(annotationPosition(point, offset), 120, 34) : point;
                   const text = annotationText(point, annotationKind);
+                  const automaticIndex = Math.max(0, screenAutomaticKinds.indexOf(annotationKind));
                   const automaticStyle = offset ? {} : {
-                    "--annotation-auto-y": `${(-5 + Math.max(0, screenAutomaticKinds.indexOf(annotationKind)) * 17) / zoom}px`,
-                    "--annotation-touch-y": `${((Math.max(0, screenAutomaticKinds.indexOf(annotationKind)) - (screenAutomaticKinds.length - 1) / 2) * 44 - 22) / zoom}px`,
+                    "--annotation-auto-y": `${(-5 + automaticIndex * 17) / pointVisualScale}px`,
+                    "--annotation-touch-y": `${((automaticIndex - (screenAutomaticKinds.length - 1) / 2) * 44 - 22) / zoom}px`,
                     "--annotation-print-y": `${(printAutomaticBaseY + printAutomaticHeights.slice(0, Math.max(0, printAutomaticKinds.indexOf(annotationKind))).reduce((sum, height) => sum + height, 0)) / effectivePrintScale}px`,
                     "--print-annotation-stack-x": point.x > printSource.x + printSource.width - 180 / effectivePrintScale ? `calc(-100% - ${7 / effectivePrintScale}px)` : `${7 / effectivePrintScale}px`,
                   } as CSSProperties;
@@ -2277,7 +2367,41 @@ export default function ScubaMapMaker() {
               <div className="drawer-body survey-body">
                 {surveyTab === "routes" ? <>
                   <section className="survey-route-editor"><div className="survey-section-title"><span>Routes</span><button onClick={() => beginRouteDrawing()}>＋ Draw route</button></div>{routeEditor(true)}</section>
-                  <details className="calibration-section"><summary>Scale calibration <small>{formatNumber(mapScale(project))} m / px</small></summary><label>Reference segment<select value={selectedVectorId ?? ""} onChange={(event) => { const vector = project.vectors.find((item) => item.id === event.target.value); if (vector) selectVector(vector); else setSelectedVectorId(null); }}><option value="">Select a route segment</option>{project.vectors.map((vector) => { const start = nodeMap.get(vector.fromId); const end = nodeMap.get(vector.toId); const route = routeForVector(routes, vector.id); return <option value={vector.id} key={vector.id}>{route ? `${routeDisplayName(route)} · ` : ""}{nodeLabel(start)} → {nodeLabel(end)}</option>; })}</select></label>{selectedVector && selectedRouteLine ? <><div className="field-grid"><label>Known distance<input inputMode="decimal" value={calibrationForm.distance} onChange={(event) => setCalibrationForm({ ...calibrationForm, distance: event.target.value })}/></label><label>Unit<select value={calibrationForm.unit} onChange={(event) => setCalibrationForm({ ...calibrationForm, unit: event.target.value as Unit })}>{Object.entries(UNIT_LABEL).map(([value, name]) => <option value={value} key={value}>{name}</option>)}</select></label></div><button className="secondary-button full-width" onClick={calibrateMap}><SoundingsIcon name="calibrate"/>Set map scale</button></> : <p className="drawer-copy">Select a segment to establish real-world scale.</p>}</details>
+                  <details className="calibration-section">
+                    <summary>Scale calibration <small>{formatNumber(mapScale(project))} m / px</small></summary>
+                    <div className="calibration-mode" role="group" aria-label="Calibration source type">
+                      <button className={calibrationMode === "route" ? "active" : ""} aria-pressed={calibrationMode === "route"} onClick={() => changeCalibrationMode("route")}>Whole route</button>
+                      <button className={calibrationMode === "segment" ? "active" : ""} aria-pressed={calibrationMode === "segment"} onClick={() => changeCalibrationMode("segment")}>Single segment</button>
+                    </div>
+                    {calibrationMode === "route" ? <label>Reference route
+                      <select value={selectedRoute?.id ?? ""} onChange={(event) => {
+                        const route = routes.find((item) => item.id === event.target.value);
+                        if (route) focusRoute(route, false);
+                        else { setSelectedRouteId(null); setSelectedVectorId(null); populateCalibrationForm(undefined, project.distanceUnit); }
+                      }}>
+                        <option value="">Select a route</option>
+                        {routes.map((route) => <option value={route.id} key={route.id}>{routeDisplayName(route)}</option>)}
+                      </select>
+                    </label> : <label>Reference segment
+                      <select value={selectedVectorId ?? ""} onChange={(event) => {
+                        const vector = project.vectors.find((item) => item.id === event.target.value);
+                        if (vector) selectVector(vector);
+                        else { setSelectedVectorId(null); populateCalibrationForm(undefined, project.distanceUnit); }
+                      }}>
+                        <option value="">Select a route segment</option>
+                        {project.vectors.map((vector) => {
+                          const start = nodeMap.get(vector.fromId);
+                          const end = nodeMap.get(vector.toId);
+                          const route = routeForVector(routes, vector.id);
+                          return <option value={vector.id} key={vector.id}>{route ? `${routeDisplayName(route)} · ` : ""}{nodeLabel(start)} → {nodeLabel(end)}</option>;
+                        })}
+                      </select>
+                    </label>}
+                    {calibrationSourceReady ? <>
+                      <div className="field-grid"><label>{calibrationMode === "route" ? "Known route distance" : "Known segment distance"}<input inputMode="decimal" value={calibrationForm.distance} onChange={(event) => setCalibrationForm((current) => ({ ...current, distance: event.target.value }))}/></label><label>Unit<select value={calibrationForm.unit} onChange={(event) => setCalibrationForm((current) => ({ ...current, unit: event.target.value as Unit }))}>{Object.entries(UNIT_LABEL).map(([value, name]) => <option value={value} key={value}>{name}</option>)}</select></label></div>
+                      <button className="secondary-button full-width" onClick={calibrateMap}><SoundingsIcon name="calibrate"/>Set map scale</button>
+                    </> : <p className="drawer-copy">Select a complete {calibrationMode === "route" ? "route" : "segment"} with visible length to establish real-world scale.</p>}
+                  </details>
                 </> : surveyTab === "points" ? <>
                   <div className="point-toolbar"><label className="point-search"><span className="sr-only">Search points</span><input type="search" value={pointSearch} placeholder="Search points" onChange={(event) => setPointSearch(event.target.value)}/></label><div className="point-filters" aria-label="Point filters">{(["all", "named", "unnamed"] as PointFilter[]).map((filter) => <button className={pointFilter === filter ? "active" : ""} key={filter} onClick={() => setPointFilter(filter)}>{filter[0].toUpperCase() + filter.slice(1)}</button>)}</div><div className="point-capture-actions"><button onClick={beginPointPlacement}><SoundingsIcon name="point"/>Add point</button></div></div>
                   <div className="survey-point-list" aria-label="Points">{filteredPoints.map((point) => { const memberships = routeMembershipsForPoint(point.id); return <button className={selectedId === point.id ? "active" : ""} key={point.id} onClick={() => { setSelectedId(point.id); setSelectedVectorId(null); setSelectedRouteId(null); setSelectedRouteVertexId(null); setSelectedFeatureId(null); }}><span className="point-list-marker">{point.symbol ? <PointSymbolImage symbol={point.symbol}/> : point.label}</span><span><b>{point.name?.trim() || point.label}</b><small>{point.name?.trim() ? point.label : "Point of interest"}{memberships.length ? ` · ${memberships.map(({ route }) => routeDisplayName(route)).join(", ")}` : " · Not assigned"}</small></span><em>{formatDepth(point, project.depthUnit)}</em></button>; })}{!filteredPoints.length && <div className="empty-panel"><SoundingsIcon name="point"/><h3>No matching points</h3><p>Change the search or filter, or add a point on the map.</p></div>}</div>

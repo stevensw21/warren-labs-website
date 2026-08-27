@@ -427,9 +427,9 @@ test("keeps route vectors clear of visible point symbols on screen and in PDF", 
   assert.match(page, /project\.pointSymbolScale = normalizePointSymbolScale\(project\.pointSymbolScale\);/);
   assert.match(page, /Map symbols/);
   assert.match(page, /aria-label="Map icon size" type="range" min=\{MIN_POINT_SYMBOL_SCALE\} max=\{MAX_POINT_SYMBOL_SCALE\} step="0\.1"/);
-  assert.match(page, /"--route-symbol-cutout-radius": `\$\{30 \* pointSymbolScale \/ zoom\}px`/);
+  assert.match(page, /"--route-symbol-cutout-radius": `\$\{30 \* pointSymbolScale \/ pointVisualScale\}px`/);
   assert.match(page, /"--print-route-symbol-cutout-radius": `\$\{20 \* pointSymbolScale \/ effectivePrintScale\}px`/);
-  assert.match(page, /"--point-symbol-size": `\$\{38 \* pointSymbolScale \/ zoom\}px`/);
+  assert.match(page, /"--point-symbol-size": `\$\{38 \* pointSymbolScale \/ pointVisualScale\}px`/);
   assert.match(page, /"--print-point-symbol-size": `\$\{24 \* pointSymbolScale \/ effectivePrintScale\}px`/);
   assert.match(page, /width=\{smartCalloutSymbolSize\.width\} height=\{smartCalloutSymbolSize\.height\}/);
   assert.match(styles, /\.route-symbol-mask \{ mask-type: luminance; \}/);
@@ -478,8 +478,8 @@ test("supports independently movable point annotations with compatible persisten
   assert.match(page, /point-leader-print screen-hidden/);
   assert.match(page, /annotationPrintVisible\(point, annotationKind\)/);
   assert.match(page, /"--print-point-leader-width": `\$\{1\.15 \/ effectivePrintScale\}px`/);
-  assert.match(styles, /\.point-annotation-auto \{[^}]*transform:\s*translate\(var\(--annotation-stack-x/);
-  assert.match(styles, /@media \(hover: none\) and \(pointer: coarse\)[\s\S]*\.point-annotation-auto \{[^}]*min-height:\s*var\(--annotation-touch-hit/);
+  assert.match(styles, /\.point-annotation-auto \{[^}]*min-width:\s*0;[^}]*min-height:\s*0;[^}]*transform:\s*translate\(var\(--annotation-stack-x/);
+  assert.match(styles, /@media \(hover: none\) and \(pointer: coarse\)[\s\S]*\.point-annotation-auto \{[^}]*min-width:\s*var\(--annotation-touch-hit[^}]*min-height:\s*var\(--annotation-touch-hit[^}]*transform:\s*translate\(var\(--annotation-touch-x/);
   assert.match(page, /const PRINT_PRIMARY_TEXT_SIZE = 12;/);
   assert.match(page, /const PRINT_SECONDARY_TEXT_SIZE = 11;/);
   assert.match(page, /"--print-primary-text-size": `\$\{PRINT_PRIMARY_TEXT_SIZE \/ effectivePrintScale\}px`/);

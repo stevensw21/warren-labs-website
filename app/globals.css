@@ -247,7 +247,7 @@ svg { display: block; }
 .point-annotation { position: relative; display: flex; align-items: center; min-width: var(--annotation-hit-width, 44px); min-height: var(--annotation-hit-height, 18px); padding: 0; border: 0; background: transparent; color: var(--map-ink); line-height: 1.1; white-space: nowrap; text-align: left; touch-action: none; user-select: none; cursor: grab; pointer-events: auto; }
 .point-annotation:active { cursor: grabbing; }
 .point-annotation:focus-visible { outline: none; }
-.point-annotation-auto { position: absolute; z-index: 10; justify-content: flex-start; transform: translate(var(--annotation-stack-x, 28px), var(--annotation-auto-y, -5px)); }
+.point-annotation-auto { position: absolute; z-index: 10; justify-content: flex-start; min-width: 0; min-height: 0; transform: translate(var(--annotation-stack-x, 28px), var(--annotation-auto-y, -5px)); }
 .point-annotation-manual { position: absolute; z-index: 10; justify-content: center; min-width: var(--annotation-manual-hit, 44px); min-height: var(--annotation-manual-hit, 44px); transform: translate(-50%, -50%); }
 .point-annotation-chip { position: relative; display: block; padding: var(--annotation-padding-y, 1px) var(--annotation-padding-x, 3px); border-radius: var(--annotation-radius, 3px); outline: var(--annotation-focus-width, 1px) solid transparent; outline-offset: 0; background: rgba(200,239,238,.72); box-shadow: none; text-shadow: none; transition: color 140ms ease, background 140ms ease, outline-color 140ms ease; }
 .point-annotation-manual .point-annotation-chip { background: rgba(200,239,238,.94); box-shadow: none; }
@@ -325,7 +325,7 @@ svg { display: block; }
 .annotation-reset-list > div > span { color: var(--on-dark-muted); font-size: 11px; }
 
 @media (hover: none) and (pointer: coarse) {
-  .point-annotation-auto { min-height: var(--annotation-touch-hit, 44px); transform: translate(var(--annotation-stack-x, 28px), var(--annotation-touch-y, -22px)); }
+  .point-annotation-auto { min-width: var(--annotation-touch-hit, 44px); min-height: var(--annotation-touch-hit, 44px); transform: translate(var(--annotation-touch-x, 28px), var(--annotation-touch-y, -22px)); }
   .annotation-reset-heading button, .annotation-reset-list button { min-height: 44px; padding-right: 12px; padding-left: 12px; }
 }
 .route-summary { display: grid; gap: 8px; margin: 4px 0 0; padding: 16px 0; border-top: 1px solid var(--divider); border-bottom: 1px solid var(--divider); }
@@ -553,6 +553,10 @@ svg { display: block; }
 .segment-mode button { min-height: 38px; border: 0; border-right: 1px solid var(--divider); background: transparent; color: var(--on-dark-muted); font-size: 10px; font-weight: 700; }
 .segment-mode button:last-child { border-right: 0; }
 .segment-mode button.active { background: rgba(255,103,85,.12); color: var(--coral); }
+.calibration-mode { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--divider); border-radius: 4px; overflow: hidden; }
+.calibration-mode button { min-height: 38px; border: 0; border-right: 1px solid var(--divider); background: transparent; color: var(--on-dark-muted); font-size: 10px; font-weight: 700; }
+.calibration-mode button:last-child { border-right: 0; }
+.calibration-mode button.active { background: rgba(255,103,85,.12); color: var(--coral); }
 .calibration-section, .field-capture-section { padding: 13px 0 18px; border-top: 1px solid var(--divider); border-bottom: 1px solid var(--divider); }
 .calibration-section summary, .field-capture-section summary { display: flex; align-items: center; justify-content: space-between; min-height: 38px; color: var(--on-dark); font-size: 12px; font-weight: 700; cursor: pointer; }
 .calibration-section summary small { color: var(--on-dark-muted); font-size: 9px; font-weight: 600; }
@@ -702,7 +706,7 @@ svg { display: block; }
   .survey-drawer .survey-body { max-height: calc(68vh - 104px); }
   .survey-drawer::before { content: ""; position: absolute; z-index: 4; top: 8px; left: 50%; width: 52px; height: 5px; border-radius: 999px; background: rgba(209,231,238,.42); transform: translateX(-50%); }
   .survey-drawer > .panel-heading { padding-top: 8px; }
-  .segment-composer, .calibration-section { display: none; }
+  .segment-composer { display: none; }
   .survey-route-editor .route-reverse { display: none; }
   .route-vertex-handle, .route-topology-actions { display: none !important; }
   .route-draw-controls { position: fixed; right: 8px; bottom: 76px; left: 8px; grid-template-columns: 1fr repeat(3, auto); padding: 7px; border-radius: 9px; }

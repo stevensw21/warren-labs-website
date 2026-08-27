@@ -67,9 +67,10 @@ test("keeps Scuba Map Maker route vectors clear of visible point symbols on scre
   assert.match(page, /project\.pointSymbolScale = normalizePointSymbolScale\(project\.pointSymbolScale\);/);
   assert.match(page, /Map symbols/);
   assert.match(page, /aria-label="Map icon size" type="range" min=\{MIN_POINT_SYMBOL_SCALE\} max=\{MAX_POINT_SYMBOL_SCALE\} step="0\.1"/);
-  assert.match(page, /"--route-symbol-cutout-radius": `\$\{30 \* pointSymbolScale \/ zoom\}px`/);
+  assert.match(page, /const pointVisualScale = pointVisualZoom\(zoom\);/);
+  assert.match(page, /"--route-symbol-cutout-radius": `\$\{30 \* pointSymbolScale \/ pointVisualScale\}px`/);
   assert.match(page, /"--print-route-symbol-cutout-radius": `\$\{20 \* pointSymbolScale \/ effectivePrintScale\}px`/);
-  assert.match(page, /"--point-symbol-size": `\$\{38 \* pointSymbolScale \/ zoom\}px`/);
+  assert.match(page, /"--point-symbol-size": `\$\{38 \* pointSymbolScale \/ pointVisualScale\}px`/);
   assert.match(page, /"--print-point-symbol-size": `\$\{24 \* pointSymbolScale \/ effectivePrintScale\}px`/);
   assert.match(page, /width=\{smartCalloutSymbolSize\.width\} height=\{smartCalloutSymbolSize\.height\}/);
   assert.match(styles, /\.route-symbol-mask \{ mask-type: luminance; \}/);

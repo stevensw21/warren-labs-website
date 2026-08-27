@@ -1,9 +1,51 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { clampDockPosition, fitMapView } from "../app/projects/scuba-map-maker/map-view.ts";
+import {
+  POINT_VISUAL_ZOOM_THRESHOLD,
+  clampDockPosition,
+  fitMapView,
+  pointVisualZoom,
+} from "../app/projects/scuba-map-maker/map-view.ts";
 
 const STAGE = { width: 800, height: 600 };
 const DOCK = { width: 128, height: 250 };
+const closeTo = (actual, expected, epsilon = 1e-9) => assert.ok(Math.abs(actual - expected) <= epsilon, `${actual} ≉ ${expected}`);
+
+test("grows point visuals through 400% zoom and keeps their screen size stable above it", () => {
+  assert.equal(POINT_VISUAL_ZOOM_THRESHOLD, 4);
+  const baseSize = 14;
+  const cases = [
+    { zoom: 5, effectiveZoom: 5, screenSize: 14 },
+    { zoom: 4, effectiveZoom: 4, screenSize: 14 },
+    { zoom: 3, effectiveZoom: 4, screenSize: 10.5 },
+    { zoom: 1, effectiveZoom: 4, screenSize: 3.5 },
+    { zoom: 0.1, effectiveZoom: 4, screenSize: 0.35 },
+  ];
+
+  for (const { zoom, effectiveZoom, screenSize } of cases) {
+    assert.equal(pointVisualZoom(zoom), effectiveZoom, `${zoom * 100}% effective zoom`);
+    closeTo((baseSize / pointVisualZoom(zoom)) * zoom, screenSize);
+  }
+});
+
+test("keeps the point-visual zoom clamp continuous at 400%", () => {
+  const delta = 1e-6;
+  const baseSize = 14;
+  const screenSize = (zoom) => (baseSize / pointVisualZoom(zoom)) * zoom;
+
+  assert.equal(pointVisualZoom(4 - delta), 4);
+  assert.equal(pointVisualZoom(4), 4);
+  assert.equal(pointVisualZoom(4 + delta), 4 + delta);
+  closeTo(screenSize(4 - delta), baseSize - baseSize * delta / 4);
+  closeTo(screenSize(4), baseSize);
+  closeTo(screenSize(4 + delta), baseSize);
+});
+
+test("normalizes invalid and nonpositive point-visual zoom values to the threshold", () => {
+  for (const zoom of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, 0, -1]) {
+    assert.equal(pointVisualZoom(zoom), POINT_VISUAL_ZOOM_THRESHOLD);
+  }
+});
 
 test("clamps the dock to all four inset stage edges", () => {
   assert.deepEqual(clampDockPosition({ left: -100, top: 150 }, STAGE, DOCK), { left: 12, top: 150 });

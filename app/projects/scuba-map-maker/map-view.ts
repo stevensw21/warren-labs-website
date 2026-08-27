@@ -5,9 +5,14 @@ export type DockSize = { width: number; height: number };
 export const DEFAULT_MAP_ZOOM = 0.78;
 export const DEFAULT_MAP_PAN = { x: 22, y: 24 };
 export const MAP_FIT_PADDING = 24;
+export const POINT_VISUAL_ZOOM_THRESHOLD = 4;
 
 function nonNegativeFinite(value: number) {
   return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+export function pointVisualZoom(zoom: number) {
+  return Math.max(POINT_VISUAL_ZOOM_THRESHOLD, nonNegativeFinite(zoom));
 }
 
 function clampDockAxis(position: number, stageSize: number, dockSize: number, inset: number) {
