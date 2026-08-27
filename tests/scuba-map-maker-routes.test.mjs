@@ -359,6 +359,8 @@ test("ships v2 named route drawing across editor, map, backup, and PDF surfaces"
   assert.match(page, /normalizeExportSettings\(stored\.exportSettings\)/);
   assert.match(page, /\["routeLabels", "Route bearings & distances"\], \["routeNameLabels", "Named route labels"\]/);
   assert.match(page, /"--route-name-angle": `\$\{anchor\.angleRadians\}rad`/);
+  assert.match(page, /const routeNameVisualScale = zoom \/ pointVisualScale;/);
+  assert.match(page, /"--route-name-visual-scale": routeNameVisualScale/);
   assert.match(page, /style=\{routeNameLabelStyle\(screen\)\}/);
   assert.match(page, /style=\{routeNameLabelStyle\(clampPrintLabelAnchor\(print\)\)\}/);
   assert.match(page, /route-name-label route-name-label-print screen-hidden/);
@@ -384,6 +386,7 @@ test("ships v2 named route drawing across editor, map, backup, and PDF surfaces"
 
   assert.match(styles, /\.route-name-label \{[^}]*transform: translate\(-50%, 18%\) rotate\(var\(--route-name-angle, 0rad\)\);/);
   assert.match(styles, /\.route-name-label > span \{[^}]*-webkit-line-clamp: 2;/);
+  assert.match(styles, /\.route-name-label > span \{[^}]*transform: scale\(var\(--route-name-visual-scale, 1\)\);/);
   assert.match(styles, /\.route-selection-path \{[^}]*var\(--route-selected-path-width/);
   assert.match(styles, /\.survey-drawer \{/);
   assert.match(styles, /\.survey-route-list/);
@@ -392,7 +395,9 @@ test("ships v2 named route drawing across editor, map, backup, and PDF surfaces"
   assert.match(styles, /@media \(max-width: 1199px\)[\s\S]*?\.zoom-controls \{ bottom:\s*84px; \}/);
   assert.match(styles, /@media \(max-width: 767px\)[\s\S]*?\.route-draw-controls \{[^}]*bottom:\s*76px;/);
   assert.match(styles, /@media print[\s\S]*\.route-name-label > span \{[^}]*background: rgba\(255,255,255,\.97\) !important;/);
+  assert.match(styles, /@media print[\s\S]*\.route-name-label > span \{[^}]*transform: none !important;/);
   assert.match(styles, /@media print[\s\S]*\.route-name-label \{[^}]*transform: translate\(-50%, 24%\) rotate\(var\(--route-name-angle, 0rad\)\) !important;/);
+  assert.match(styles, /@media print[\s\S]*\.route-name-label \{[^}]*width: var\(--print-route-name-width\) !important;/);
 });
 
 test("keeps route vectors clear of visible point symbols on screen and in PDF", async () => {
@@ -425,7 +430,7 @@ test("keeps route vectors clear of visible point symbols on screen and in PDF", 
   assert.match(page, /pointSymbolScale\?: number/);
   assert.match(page, /import \{[^}]*DEFAULT_POINT_SYMBOL_SCALE[^}]*MAX_POINT_SYMBOL_SCALE[^}]*MIN_POINT_SYMBOL_SCALE[^}]*normalizePointSymbolScale[^}]*\} from "\.\/point-symbols";/);
   assert.match(page, /project\.pointSymbolScale = normalizePointSymbolScale\(project\.pointSymbolScale\);/);
-  assert.match(page, /Map symbols/);
+  assert.match(page, /Map visuals/);
   assert.match(page, /aria-label="Map icon size" type="range" min=\{MIN_POINT_SYMBOL_SCALE\} max=\{MAX_POINT_SYMBOL_SCALE\} step="0\.1"/);
   assert.match(page, /"--route-symbol-cutout-radius": `\$\{30 \* pointSymbolScale \/ pointVisualScale\}px`/);
   assert.match(page, /"--print-route-symbol-cutout-radius": `\$\{20 \* pointSymbolScale \/ effectivePrintScale\}px`/);

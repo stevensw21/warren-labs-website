@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  POINT_VISUAL_ZOOM_THRESHOLD,
+  DEFAULT_VISUAL_SCALE_STOP_ZOOM,
+  MAX_VISUAL_SCALE_STOP_ZOOM,
+  MIN_VISUAL_SCALE_STOP_ZOOM,
+  VISUAL_SCALE_STOP_ZOOM_STEP,
   clampDockPosition,
   fitMapView,
+  normalizeVisualScaleStopZoom,
   pointVisualZoom,
 } from "../app/projects/scuba-map-maker/map-view.ts";
 
@@ -11,8 +15,8 @@ const STAGE = { width: 800, height: 600 };
 const DOCK = { width: 128, height: 250 };
 const closeTo = (actual, expected, epsilon = 1e-9) => assert.ok(Math.abs(actual - expected) <= epsilon, `${actual} ≉ ${expected}`);
 
-test("grows point visuals through 400% zoom and keeps their screen size stable above it", () => {
-  assert.equal(POINT_VISUAL_ZOOM_THRESHOLD, 4);
+test("grows clamped visuals through the default 400% zoom and keeps their screen size stable above it", () => {
+  assert.equal(DEFAULT_VISUAL_SCALE_STOP_ZOOM, 4);
   const baseSize = 14;
   const cases = [
     { zoom: 5, effectiveZoom: 5, screenSize: 14 },
@@ -28,7 +32,7 @@ test("grows point visuals through 400% zoom and keeps their screen size stable a
   }
 });
 
-test("keeps the point-visual zoom clamp continuous at 400%", () => {
+test("keeps the visual zoom clamp continuous at 400%", () => {
   const delta = 1e-6;
   const baseSize = 14;
   const screenSize = (zoom) => (baseSize / pointVisualZoom(zoom)) * zoom;
@@ -41,9 +45,24 @@ test("keeps the point-visual zoom clamp continuous at 400%", () => {
   closeTo(screenSize(4 + delta), baseSize);
 });
 
-test("normalizes invalid and nonpositive point-visual zoom values to the threshold", () => {
+test("normalizes the configurable visual stop zoom and applies it continuously", () => {
+  assert.equal(MIN_VISUAL_SCALE_STOP_ZOOM, 1);
+  assert.equal(MAX_VISUAL_SCALE_STOP_ZOOM, 8);
+  assert.equal(VISUAL_SCALE_STOP_ZOOM_STEP, 0.5);
+  assert.equal(normalizeVisualScaleStopZoom(undefined), 4);
+  assert.equal(normalizeVisualScaleStopZoom(Number.NaN), 4);
+  assert.equal(normalizeVisualScaleStopZoom(Number.POSITIVE_INFINITY), 4);
+  assert.equal(normalizeVisualScaleStopZoom("2"), 4);
+  assert.equal(normalizeVisualScaleStopZoom(0.1), 1);
+  assert.equal(normalizeVisualScaleStopZoom(2.26), 2.5);
+  assert.equal(normalizeVisualScaleStopZoom(10), 8);
+  assert.equal(pointVisualZoom(1, 2), 2);
+  assert.equal(pointVisualZoom(2, 2), 2);
+  assert.equal(pointVisualZoom(3, 2), 3);
+  assert.equal(pointVisualZoom(Number.NaN, 2), 2);
+
   for (const zoom of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, 0, -1]) {
-    assert.equal(pointVisualZoom(zoom), POINT_VISUAL_ZOOM_THRESHOLD);
+    assert.equal(pointVisualZoom(zoom), DEFAULT_VISUAL_SCALE_STOP_ZOOM);
   }
 });
 

@@ -5,14 +5,23 @@ export type DockSize = { width: number; height: number };
 export const DEFAULT_MAP_ZOOM = 0.78;
 export const DEFAULT_MAP_PAN = { x: 22, y: 24 };
 export const MAP_FIT_PADDING = 24;
-export const POINT_VISUAL_ZOOM_THRESHOLD = 4;
+export const DEFAULT_VISUAL_SCALE_STOP_ZOOM = 4;
+export const MIN_VISUAL_SCALE_STOP_ZOOM = 1;
+export const MAX_VISUAL_SCALE_STOP_ZOOM = 8;
+export const VISUAL_SCALE_STOP_ZOOM_STEP = 0.5;
 
 function nonNegativeFinite(value: number) {
   return Number.isFinite(value) && value > 0 ? value : 0;
 }
 
-export function pointVisualZoom(zoom: number) {
-  return Math.max(POINT_VISUAL_ZOOM_THRESHOLD, nonNegativeFinite(zoom));
+export function normalizeVisualScaleStopZoom(value: unknown) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return DEFAULT_VISUAL_SCALE_STOP_ZOOM;
+  const stepped = Math.round(value / VISUAL_SCALE_STOP_ZOOM_STEP) * VISUAL_SCALE_STOP_ZOOM_STEP;
+  return Math.min(MAX_VISUAL_SCALE_STOP_ZOOM, Math.max(MIN_VISUAL_SCALE_STOP_ZOOM, stepped));
+}
+
+export function pointVisualZoom(zoom: number, stopZoom = DEFAULT_VISUAL_SCALE_STOP_ZOOM) {
+  return Math.max(normalizeVisualScaleStopZoom(stopZoom), nonNegativeFinite(zoom));
 }
 
 function clampDockAxis(position: number, stageSize: number, dockSize: number, inset: number) {

@@ -64,10 +64,10 @@ test("keeps the fixed scale while stale calibration references normalize to scal
   assert.doesNotMatch(page, /indexedDB\.open\(DB_NAME, 2\)/);
 });
 
-test("applies the 400 percent clamp only to visible point content", async () => {
+test("applies the configured visual clamp only to visible point content", async () => {
   const page = await readFile(pageUrl, "utf8");
 
-  assert.match(page, /const pointVisualScale = pointVisualZoom\(zoom\)/);
+  assert.match(page, /const pointVisualScale = pointVisualZoom\(zoom, visualScaleStopZoom\)/);
   for (const expression of [
     "14 / pointVisualScale",
     "38 * pointSymbolScale / pointVisualScale",

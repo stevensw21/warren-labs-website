@@ -63,15 +63,24 @@ test("keeps Scuba Map Maker route vectors clear of visible point symbols on scre
   assert.match(maskedRouteInk, /route-direction/);
 
   assert.match(page, /pointSymbolScale\?: number/);
+  assert.match(page, /visualScaleStopZoom\?: number/);
+  assert.match(page, /visualScaleStopZoom: DEFAULT_VISUAL_SCALE_STOP_ZOOM/);
   assert.match(page, /import \{[^}]*DEFAULT_POINT_SYMBOL_SCALE[^}]*MAX_POINT_SYMBOL_SCALE[^}]*MIN_POINT_SYMBOL_SCALE[^}]*normalizePointSymbolScale[^}]*\} from "\.\/point-symbols";/);
   assert.match(page, /project\.pointSymbolScale = normalizePointSymbolScale\(project\.pointSymbolScale\);/);
-  assert.match(page, /Map symbols/);
+  assert.match(page, /project\.visualScaleStopZoom = normalizeVisualScaleStopZoom\(project\.visualScaleStopZoom\);/);
+  assert.match(page, /Map visuals/);
   assert.match(page, /aria-label="Map icon size" type="range" min=\{MIN_POINT_SYMBOL_SCALE\} max=\{MAX_POINT_SYMBOL_SCALE\} step="0\.1"/);
-  assert.match(page, /const pointVisualScale = pointVisualZoom\(zoom\);/);
+  assert.match(page, /const VISUAL_SCALE_STOP_ZOOM_OPTIONS = Array\.from/);
+  assert.match(page, /<select id="visual-scale-stop-zoom" aria-label="Point and route labels full-size zoom" value=\{visualScaleStopZoom\} onChange=\{\(event\) => setVisualScaleStopZoom\(Number\(event\.target\.value\)\)\}/);
+  assert.match(page, /VISUAL_SCALE_STOP_ZOOM_OPTIONS\.map\(\(value\) => <option value=\{value\} key=\{value\}>\{Math\.round\(value \* 100\)\}% zoom<\/option>/);
+  assert.match(page, /const visualScaleStopZoom = normalizeVisualScaleStopZoom\(project\.visualScaleStopZoom\);/);
+  assert.match(page, /const setVisualScaleStopZoom = \(value: number\) => mutate\([^;]+normalizeVisualScaleStopZoom\(value\)/);
+  assert.match(page, /const pointVisualScale = pointVisualZoom\(zoom, visualScaleStopZoom\);/);
   assert.match(page, /"--route-symbol-cutout-radius": `\$\{30 \* pointSymbolScale \/ pointVisualScale\}px`/);
   assert.match(page, /"--print-route-symbol-cutout-radius": `\$\{20 \* pointSymbolScale \/ effectivePrintScale\}px`/);
   assert.match(page, /"--point-symbol-size": `\$\{38 \* pointSymbolScale \/ pointVisualScale\}px`/);
   assert.match(page, /"--print-point-symbol-size": `\$\{24 \* pointSymbolScale \/ effectivePrintScale\}px`/);
+  assert.match(page, /"--print-route-name-width": `\$\{150 \/ effectivePrintScale\}px`/);
   assert.match(page, /width=\{smartCalloutSymbolSize\.width\} height=\{smartCalloutSymbolSize\.height\}/);
   assert.match(styles, /\.route-symbol-mask \{ mask-type: luminance; \}/);
   assert.match(styles, /\.route-symbol-cutout \{ r: var\(--route-symbol-cutout-radius, 30px\); \}/);
