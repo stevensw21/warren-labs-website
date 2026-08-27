@@ -24,6 +24,12 @@ export const PRINT_CHART_INSET = 16;
 export const PRINT_CALLOUT_GAP = 12;
 export const PRINT_CALLOUT_RAIL_WIDTH = 156;
 
+const SCALE_NUMBER_FORMATTER = new Intl.NumberFormat("en-US", { maximumSignificantDigits: 3 });
+
+export function formatScaleNumber(value: number) {
+  return SCALE_NUMBER_FORMATTER.format(value);
+}
+
 const positive = (value: number, fallback: number) => Number.isFinite(value) && value > 0 ? value : fallback;
 
 export function printViewportFor(mode: PrintLayoutMode): PrintViewport {

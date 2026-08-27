@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
@@ -8,6 +9,7 @@ import {
   PRINT_CHART_INSET,
   chooseScaleBar,
   createPrintProjection,
+  formatScaleNumber,
   printViewportFor,
 } from "../app/projects/scuba-map-maker/print-layout.ts";
 
@@ -59,6 +61,50 @@ test("selects readable scale bars for default, tight-crop, and extended-canvas p
     assert.ok(bar.printedPixels >= 90 && bar.printedPixels <= 150, `${bar.printedPixels}px at scale ${scale}`);
     closeTo(bar.printedPixels, bar.sourcePixels * scale);
   }
+});
+
+test("changes screen scale distances across zoom thresholds in every supported unit", () => {
+  const cases = [
+    { unit: "feet", metersPerUnit: 0.3048, zoomedOutValue: 200, zoomedInValue: 100 },
+    { unit: "meters", metersPerUnit: 1, zoomedOutValue: 100, zoomedInValue: 20 },
+    { unit: "miles", metersPerUnit: 1609.344, zoomedOutValue: 0.05, zoomedInValue: 0.02 },
+  ];
+
+  for (const { unit, metersPerUnit, zoomedOutValue, zoomedInValue } of cases) {
+    const zoomedOut = chooseScaleBar(0.5, metersPerUnit, 0.78);
+    const zoomedIn = chooseScaleBar(0.5, metersPerUnit, 1.74);
+    assert.equal(zoomedOut.value, zoomedOutValue, `${unit} distance at 78% zoom`);
+    assert.equal(zoomedIn.value, zoomedInValue, `${unit} distance at 174% zoom`);
+    assert.ok(zoomedIn.value < zoomedOut.value, `${unit} scale should show a shorter distance after zooming in`);
+    closeTo(zoomedOut.printedPixels, zoomedOut.sourcePixels * 0.78);
+    closeTo(zoomedIn.printedPixels, zoomedIn.sourcePixels * 1.74);
+  }
+});
+
+test("formats extreme nonzero mile ticks without rounding them to zero", () => {
+  const extremeMiles = chooseScaleBar(0.000001, 1609.344, 10);
+  assert.ok(extremeMiles.value > 0);
+  assert.notEqual(formatScaleNumber(extremeMiles.value / 2), "0");
+  assert.notEqual(formatScaleNumber(extremeMiles.value), "0");
+});
+
+test("wires the screen scale bar to editor zoom while preserving print-scale projection", async () => {
+  const [page, styles] = await Promise.all([
+    readFile(new URL("../app/projects/scuba-map-maker/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(page, /const printBar = chooseScaleBar\(mapScale\(project\), METERS_PER_UNIT\[project\.distanceUnit\], effectivePrintScale\);/);
+  assert.match(page, /const mapBar = chooseScaleBar\(mapScale\(project\), METERS_PER_UNIT\[project\.distanceUnit\], 1\);/);
+  assert.match(page, /const screenBar = chooseScaleBar\(mapScale\(project\), METERS_PER_UNIT\[project\.distanceUnit\], zoom\);/);
+  assert.match(page, /formatScaleNumber,/);
+  assert.match(page, /className="screen-scale print-hidden" style=\{\{ "--screen-scale-bar-width": `\$\{screenBar\.printedPixels\}px` \} as CSSProperties\}/);
+  assert.match(page, /<div className="scale-labels"><span>0<\/span><span>\{formatScaleNumber\(screenBar\.value \/ 2\)\}<\/span><span>\{formatScaleNumber\(screenBar\.value\)\} \{project\.distanceUnit\}<\/span><\/div>/);
+  assert.doesNotMatch(page, /className="screen-scale print-hidden"[\s\S]{0,300}formatNumber\(screenBar\.value/);
+
+  assert.match(styles, /\.screen-scale \{[^}]*width:\s*calc\(var\(--screen-scale-bar-width, 120px\) \+ 30px\);/);
+  assert.match(styles, /\.scale-labels \{[^}]*width:\s*var\(--screen-scale-bar-width, 120px\);/);
+  assert.match(styles, /\.screen-scale > i \{[^}]*width:\s*var\(--screen-scale-bar-width, 120px\);/);
 });
 
 test("normalizes invalid scale inputs to finite output", () => {

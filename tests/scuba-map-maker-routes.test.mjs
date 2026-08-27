@@ -144,6 +144,28 @@ test("keeps the desktop map toolbox readable, movable, and session-only", async 
   assert.match(page, /event\.shiftKey \? 32 : 8/);
   assert.doesNotMatch(page, /localStorage[\s\S]{0,80}tool.dock/i);
 
+  const addPointDockButtons = page.match(/<DockButton\b[^>]*\blabel="Add a Point"[^>]*\/>/g) ?? [];
+  assert.equal(addPointDockButtons.length, 1, "the map dock should contain exactly one Add a Point button");
+  assert.match(page, /<DockButton[^\n]*\blabel="Select"[^\n]*\/>\s*<DockButton[^\n]*\blabel="Add a Point"[^\n]*\bonClick=\{beginPointPlacement\}[^\n]*\/>/);
+  const beginPointPlacement = blockAt(page, "const beginPointPlacement").text;
+  assert.match(beginPointPlacement, /setTool\("point"\)/);
+  assert.match(beginPointPlacement, /setActivePanel\(null\)/);
+  assert.match(beginPointPlacement, /setRouteDraft\(null\)/);
+  assert.match(beginPointPlacement, /setRouteDraftPointer\(null\)/);
+  assert.match(beginPointPlacement, /replaceFeatureDraft\(null\)/);
+  assert.match(beginPointPlacement, /setFeatureDraftPointer\(null\)/);
+  assert.match(beginPointPlacement, /setFeatureModePickerOpen\(false\)/);
+  for (const selection of ["Id", "VectorId", "RouteId", "RouteVertexId", "FeatureId"]) {
+    assert.match(beginPointPlacement, new RegExp(`setSelected${selection}\\(null\\)`));
+  }
+  assert.match(beginPointPlacement, /setNotice\("Place a field point on the map\."\)/);
+  assert.equal(page.match(/onClick=\{beginPointPlacement\}/g)?.length, 2, "dock and Survey Points should share point-placement setup");
+  assert.match(page, /point-capture-actions[^>]*><button onClick=\{beginPointPlacement\}><SoundingsIcon name="point"\/>Add point<\/button>/);
+
+  const existingPointBranch = blockAt(page, "if (existingPoint)").text;
+  assert.match(existingPointBranch, /setSelectedId\(existingPoint\.id\)/);
+  assert.match(existingPointBranch, /setTool\("select"\)/);
+
   assert.match(styles, /\.tool-dock \{[^}]*width:\s*128px;/);
   assert.match(styles, /\.tool-dock\.positioned \{[^}]*z-index:\s*63;[^}]*top:\s*var\(--tool-dock-top\);[^}]*left:\s*var\(--tool-dock-left\);[^}]*transform:\s*none;/);
   assert.match(styles, /\.tool-dock-handle \{[^}]*touch-action:\s*none;[^}]*cursor:\s*grab;/);
@@ -187,10 +209,19 @@ test("separates editable route vertices from point-of-interest detail layers", a
 
   const layerVisibility = page.match(/type LayerVisibility = \{([^}]*)\}/)?.[1] ?? "";
   assert.ok(layerVisibility, "LayerVisibility type should remain declared");
-  for (const layer of ["routeLabels", "pointNames", "names", "depths"]) {
+  for (const layer of ["routeLabels", "routeNameLabels", "pointNames", "names", "depths"]) {
     assert.match(layerVisibility, new RegExp(`\\b${layer}: boolean;`));
   }
   assert.doesNotMatch(layerVisibility, /\blabels: boolean;/);
+  assert.match(page, /useState<LayerVisibility>\(\{[^}]*routeLabels: true, routeNameLabels: true,[^}]*\}\)/);
+
+  const routeLayersStart = page.indexOf('<p className="layer-group-title">Routes</p>');
+  const pointLayersStart = page.indexOf('<p className="layer-group-title">Points</p>', routeLayersStart);
+  assert.ok(routeLayersStart >= 0 && pointLayersStart > routeLayersStart, "route layer controls should remain grouped together");
+  const routeLayers = page.slice(routeLayersStart, pointLayersStart);
+  assert.match(routeLayers, /<span className="layer-name">Bearings &amp; distances<\/span>[\s\S]*checked=\{visibleLayers\.routeLabels\}/);
+  assert.match(routeLayers, /<span className="layer-name">Route names<\/span>[\s\S]*checked=\{visibleLayers\.routeNameLabels\}/);
+  assert.doesNotMatch(routeLayers, /<span className="layer-name">Route labels<\/span>/);
 
   assert.match(page, /buildRouteNetwork\(routeNodes\(project\), project\.vectors\)/);
   assert.match(page, /className=\{`route-network/);
@@ -250,6 +281,8 @@ test("separates editable route vertices from point-of-interest detail layers", a
   assert.match(page, /data-manual-position=\{offset \? "true" : "false"\}/);
   assert.match(page, /point-annotation-chip point-annotation-\$\{annotationKind\}/);
   assert.match(page, /vector-label[^>]*visibleLayers\.routeLabels/);
+  assert.match(page, /route-name-label print-hidden\$\{visibleLayers\.routeNameLabels \? "" : " screen-hidden"\}/);
+  assert.doesNotMatch(page, /route-name-label print-hidden\$\{visibleLayers\.routeLabels \? "" : " screen-hidden"\}/);
   assert.match(page, /reference-image[^>]*project\.reference\.visible[^>]*printSettings\.reference/);
   assert.doesNotMatch(page, /project\.reference\.dataUrl && project\.reference\.visible/);
   assert.match(page, /vector-line[^>]*visibleLayers\.routes/);

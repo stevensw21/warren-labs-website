@@ -609,9 +609,9 @@ svg { display: block; }
 .screen-north svg { width: 46px; height: 74px; }
 .screen-north svg path:first-child { fill: rgba(247,248,244,.88); stroke: var(--map-ink); stroke-width: 1.5; }
 .screen-north svg path:last-child { fill: var(--map-ink); }
-.screen-scale { position: absolute; z-index: 30; bottom: 34px; left: 34px; width: 340px; min-height: 54px; padding: 10px 14px; border: 1px solid rgba(11,48,75,.55); border-radius: 4px; background: rgba(245,255,254,.8); color: var(--map-ink); box-shadow: 0 5px 16px rgba(7,27,41,.1); }
-.scale-labels { display: flex; justify-content: space-between; font-size: 10px; font-weight: 650; }
-.screen-scale > i { position: relative; display: block; height: 10px; margin-top: 4px; border-right: 2px solid; border-bottom: 2px solid; border-left: 2px solid; }
+.screen-scale { position: absolute; z-index: 30; bottom: 34px; left: 34px; width: calc(var(--screen-scale-bar-width, 120px) + 30px); min-height: 54px; padding: 10px 14px; border: 1px solid rgba(11,48,75,.55); border-radius: 4px; background: rgba(245,255,254,.8); color: var(--map-ink); box-shadow: 0 5px 16px rgba(7,27,41,.1); }
+.scale-labels { display: flex; justify-content: space-between; width: var(--screen-scale-bar-width, 120px); font-size: 10px; font-weight: 650; }
+.screen-scale > i { position: relative; display: block; width: var(--screen-scale-bar-width, 120px); height: 10px; margin-top: 4px; border-right: 2px solid; border-bottom: 2px solid; border-left: 2px solid; }
 .screen-scale > i::after { content: ""; position: absolute; bottom: -2px; left: 50%; height: 8px; border-left: 2px solid; }
 .zoom-controls { position: absolute; z-index: 46; right: 22px; bottom: 110px; display: grid; grid-template-columns: 48px 76px 48px 50px; min-height: 50px; overflow: hidden; border: 1px solid var(--divider); border-radius: 7px; background: var(--chrome-950); box-shadow: var(--shadow); }
 .zoom-controls button, .zoom-controls span { display: grid; place-items: center; min-height: 50px; border: 0; border-right: 1px solid var(--divider); background: transparent; color: var(--on-dark); font-size: 19px; }
@@ -661,7 +661,7 @@ svg { display: block; }
   .drawer-shell { width: 324px; }
   .context-stack { width: 250px; }
   .notice-toast { left: 126px; max-width: calc(100% - 450px); }
-  .screen-scale { bottom: 86px; width: 250px; }
+  .screen-scale { bottom: 86px; }
   .zoom-controls { bottom: 84px; }
   .map-readout { bottom: 22px; }
 }
