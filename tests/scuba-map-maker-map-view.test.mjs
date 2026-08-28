@@ -19,11 +19,10 @@ test("grows clamped visuals through the default 400% zoom and keeps their screen
   assert.equal(DEFAULT_VISUAL_SCALE_STOP_ZOOM, 4);
   const baseSize = 14;
   const cases = [
-    { zoom: 5, effectiveZoom: 5, screenSize: 14 },
+    { zoom: 8, effectiveZoom: 8, screenSize: 14 },
+    { zoom: 4.62, effectiveZoom: 4.62, screenSize: 14 },
     { zoom: 4, effectiveZoom: 4, screenSize: 14 },
-    { zoom: 3, effectiveZoom: 4, screenSize: 10.5 },
     { zoom: 1, effectiveZoom: 4, screenSize: 3.5 },
-    { zoom: 0.1, effectiveZoom: 4, screenSize: 0.35 },
   ];
 
   for (const { zoom, effectiveZoom, screenSize } of cases) {

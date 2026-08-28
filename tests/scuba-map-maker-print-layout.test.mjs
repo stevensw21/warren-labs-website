@@ -9,6 +9,7 @@ import {
   PRINT_CHART_INSET,
   chooseScaleBar,
   createPrintProjection,
+  exactPrintClipGeometry,
   formatScaleNumber,
   printViewportFor,
 } from "../app/projects/scuba-map-maker/print-layout.ts";
@@ -52,6 +53,41 @@ test("fits 100x100 crops and Warren's 10000x10000 canvas into the same frame", (
   closeTo(extendedCanvas.scale, 0.0608);
   closeTo(extendedCanvas.renderedWidth, 608);
   closeTo(extendedCanvas.renderedHeight, 608);
+});
+
+test("clips exact wide and tall selections to their rendered size without letterbox exposure", () => {
+  const viewport = printViewportFor("map");
+  for (const source of [
+    { x: 100, y: 250, width: 1000, height: 240 },
+    { x: 400, y: 50, width: 200, height: 700 },
+    { x: 0, y: 0, width: 1200, height: 800 },
+  ]) {
+    const projection = createPrintProjection(source, viewport);
+    const clip = exactPrintClipGeometry(source, projection);
+    assert.deepEqual(clip.viewport, {
+      x: projection.originX,
+      y: projection.originY,
+      width: projection.renderedWidth,
+      height: projection.renderedHeight,
+    });
+    closeTo(clip.canvasOffsetX + source.x * projection.scale, 0);
+    closeTo(clip.canvasOffsetY + source.y * projection.scale, 0);
+    closeTo(source.width * projection.scale, clip.viewport.width);
+    closeTo(source.height * projection.scale, clip.viewport.height);
+    assert.ok(clip.viewport.x >= viewport.x);
+    assert.ok(clip.viewport.y >= viewport.y);
+    assert.ok(clip.viewport.x + clip.viewport.width <= viewport.x + viewport.width + 1e-9);
+    assert.ok(clip.viewport.y + clip.viewport.height <= viewport.y + viewport.height + 1e-9);
+  }
+});
+
+test("wires exact clipping to the selected rectangle or whole-canvas fallback", async () => {
+  const page = await readFile(new URL("../app/projects/scuba-map-maker/page.tsx", import.meta.url), "utf8");
+  assert.match(page, /const printSource: PrintSource = printArea \?\? \{ x: 0, y: 0, width: canvasSize\.width, height: canvasSize\.height \}/);
+  assert.match(page, /const exactPrintClip = matchCurrentMap \? exactPrintClipGeometry\(printSource, printProjection\) : null/);
+  assert.match(page, /const printMapViewport = exactPrintClip\?\.viewport \?\? activePrintViewport/);
+  assert.match(page, /const printCanvasOffsetX = exactPrintClip\?\.canvasOffsetX \?\? printProjection\.canvasOffsetX/);
+  assert.match(page, /const printCanvasOffsetY = exactPrintClip\?\.canvasOffsetY \?\? printProjection\.canvasOffsetY/);
 });
 
 test("selects readable scale bars for default, tight-crop, and extended-canvas projections", () => {

@@ -284,21 +284,21 @@ test("separates editable route vertices from point-of-interest detail layers", a
   assert.match(page, /route-name-label print-hidden\$\{visibleLayers\.routeNameLabels \? "" : " screen-hidden"\}/);
   assert.doesNotMatch(page, /route-name-label print-hidden\$\{visibleLayers\.routeLabels \? "" : " screen-hidden"\}/);
   assert.match(page, /reference-image[^>]*project\.reference\.visible[^>]*printSettings\.reference/);
-  assert.doesNotMatch(page, /project\.reference\.dataUrl && project\.reference\.visible/);
+  assert.match(page, /reference: Boolean\(project\.reference\.dataUrl && project\.reference\.visible\)/);
   assert.match(page, /vector-line[^>]*visibleLayers\.routes/);
   assert.doesNotMatch(page, /vector-group[^>]*visibleLayers\.routes/);
 
   assert.match(styles, /@media screen\s*\{[\s\S]*?\.screen-hidden\s*\{\s*display:\s*none !important;\s*\}/);
   assert.match(styles, /\.route-network-path \{[^}]*stroke-linecap:\s*butt;[^}]*stroke-linejoin:\s*miter;[^}]*stroke-miterlimit:\s*2\.5;/);
   assert.match(styles, /\.route-network-branch \{[^}]*r:\s*var\(--route-branch-radius/);
-  assert.match(styles, /\.route-network \{ --route-width: var\(--print-route-width\) !important; --route-branch-radius: var\(--print-route-branch-radius\) !important;[^}]*\}/);
+  assert.match(styles, /\.map-stage\.optimized-chart-print \.route-network \{ --route-width: var\(--print-route-width\) !important; --route-branch-radius: var\(--print-route-branch-radius\) !important;[^}]*\}/);
   assert.match(styles, /\.route-network-selection, \.vector-line \{ display: none !important; \}/);
-  assert.match(styles, /\.vector-label \{[^}]*color:\s*#174b5c !important;/);
+  assert.match(styles, /\.map-stage\.optimized-chart-print \.vector-label \{[^}]*color:\s*#174b5c !important;/);
   assert.match(styles, /\.point-leaders \{[^}]*z-index:\s*7;[^}]*pointer-events:\s*none;/);
   assert.match(styles, /\.vector-label \{[^}]*z-index:\s*8;/);
   assert.match(styles, /\.point-leader \{[^}]*stroke-width:\s*var\(--point-leader-width[^}]*stroke-linecap:\s*round;/);
   assert.match(styles, /\.point-annotation-manual \{[^}]*min-width:\s*var\(--annotation-manual-hit[^}]*transform:\s*translate\(-50%, -50%\);/);
-  assert.match(styles, /\.point-leaders \{ --point-leader-width: var\(--print-point-leader-width\) !important; \}/);
+  assert.match(styles, /\.map-stage\.optimized-chart-print \.point-leaders \{ --point-leader-width: var\(--print-point-leader-width\) !important; \}/);
   assert.match(styles, /@media print[\s\S]*\.route-draft-layer,[^}]*\.route-vertex-handle[^}]*\{ display: none !important; \}/);
   assert.match(styles, /\.map-stage, \.map-stage\.has-print-area, \.map-stage\.smart-callout-mode \{[^}]*width:\s*980px !important;[^}]*height:\s*640px !important;[^}]*overflow:\s*hidden !important;/);
 });
@@ -362,7 +362,7 @@ test("ships v2 named route drawing across editor, map, backup, and PDF surfaces"
   assert.match(page, /const routeNameVisualScale = zoom \/ pointVisualScale;/);
   assert.match(page, /"--route-name-visual-scale": routeNameVisualScale/);
   assert.match(page, /style=\{routeNameLabelStyle\(screen\)\}/);
-  assert.match(page, /style=\{routeNameLabelStyle\(clampPrintLabelAnchor\(print\)\)\}/);
+  assert.match(page, /style=\{routeNameLabelStyle\(matchCurrentMap \? print : clampPrintLabelAnchor\(print\)\)\}/);
   assert.match(page, /route-name-label route-name-label-print screen-hidden/);
   assert.match(page, /vector-label[^>]*exportClass\(printSettings\.routeLabels\)/);
   assert.match(page, /route-name-label route-name-label-print screen-hidden\$\{exportClass\(printSettings\.routeNameLabels\)\}/);
@@ -394,10 +394,10 @@ test("ships v2 named route drawing across editor, map, backup, and PDF surfaces"
   assert.match(styles, /\.route-draw-controls \{[^}]*z-index:\s*45;[^}]*right:\s*300px;[^}]*bottom:\s*74px;/);
   assert.match(styles, /@media \(max-width: 1199px\)[\s\S]*?\.zoom-controls \{ bottom:\s*84px; \}/);
   assert.match(styles, /@media \(max-width: 767px\)[\s\S]*?\.route-draw-controls \{[^}]*bottom:\s*76px;/);
-  assert.match(styles, /@media print[\s\S]*\.route-name-label > span \{[^}]*background: rgba\(255,255,255,\.97\) !important;/);
-  assert.match(styles, /@media print[\s\S]*\.route-name-label > span \{[^}]*transform: none !important;/);
-  assert.match(styles, /@media print[\s\S]*\.route-name-label \{[^}]*transform: translate\(-50%, 24%\) rotate\(var\(--route-name-angle, 0rad\)\) !important;/);
-  assert.match(styles, /@media print[\s\S]*\.route-name-label \{[^}]*width: var\(--print-route-name-width\) !important;/);
+  assert.match(styles, /@media print[\s\S]*\.map-stage\.optimized-chart-print \.route-name-label > span \{[^}]*background: rgba\(255,255,255,\.97\) !important;/);
+  assert.match(styles, /@media print[\s\S]*\.map-stage\.optimized-chart-print \.route-name-label > span \{[^}]*transform: none !important;/);
+  assert.match(styles, /@media print[\s\S]*\.map-stage\.optimized-chart-print \.route-name-label \{[^}]*transform: translate\(-50%, 24%\) rotate\(var\(--route-name-angle, 0rad\)\) !important;/);
+  assert.match(styles, /@media print[\s\S]*\.map-stage\.optimized-chart-print \.route-name-label \{[^}]*width: var\(--print-route-name-width\) !important;/);
 });
 
 test("keeps route vectors clear of visible point symbols on screen and in PDF", async () => {
@@ -413,7 +413,7 @@ test("keeps route vectors clear of visible point symbols on screen and in PDF", 
   const symbolCutouts = page.match(/\{routeSymbolPoints\.map\(\(point\) => <circle[\s\S]*?\/>\)\}/)?.[0] ?? "";
   assert.ok(symbolCutouts, "every symbol-bearing point of interest should create a route mask cutout");
   assert.match(symbolCutouts, /route-symbol-cutout/);
-  assert.match(symbolCutouts, /exportClass\(printSettings\.pointMarkers && pointInPrintArea\(point, printArea\)\)/);
+  assert.match(symbolCutouts, /exportClass\(printSettings\.pointMarkers && includeMapPrintAnchor\(point\)\)/);
   assert.match(symbolCutouts, /data-route-symbol-cutout=\{point\.id\}/);
   assert.match(symbolCutouts, /fill="black"/);
 
@@ -476,7 +476,7 @@ test("supports independently movable point annotations with compatible persisten
   assert.match(page, /Reset \$\{POINT_ANNOTATION_LABELS\[annotationKind\]\} position for \$\{selected\.label\}/);
   assert.match(page, /const screenDistance = Math\.hypot\(offset\.dx, offset\.dy\) \* zoom/);
   assert.match(page, /screenDistance >= 8/);
-  assert.match(page, /screenDistance >= 6/);
+  assert.match(page, /screenDistance >= \(matchCurrentMap \? 8 : 6\)/);
   assert.match(page, /const printEnd = annotationPosition\(point, offset\)/);
   assert.match(page, /x2=\{printEnd\.x\}[\s\S]*?y2=\{printEnd\.y\}/);
   assert.match(page, /point-leader-screen print-hidden/);
@@ -497,20 +497,20 @@ test("supports independently movable point annotations with compatible persisten
   assert.match(page, /"--annotation-print-y": `\$\{\(printAutomaticBaseY \+ printAutomaticHeights\.slice/);
   assert.match(page, /"--annotation-print-left": `\$\{printPosition\.x\}px`/);
   assert.match(page, /"--annotation-print-top": `\$\{printPosition\.y\}px`/);
-  assert.match(styles, /\.water-label \{[^}]*font-size: var\(--print-secondary-text-size\) !important;/);
-  assert.match(styles, /\.vector-label, \.point-annotation-pointName, \.point-annotation-depth \{ font-size: var\(--print-secondary-text-size\) !important; \}/);
+  assert.match(styles, /\.map-stage\.optimized-chart-print \.water-label \{[^}]*font-size: var\(--print-secondary-text-size\) !important;/);
+  assert.match(styles, /\.map-stage\.optimized-chart-print \.vector-label, \.map-stage\.optimized-chart-print \.point-annotation-pointName, \.map-stage\.optimized-chart-print \.point-annotation-depth \{ font-size: var\(--print-secondary-text-size\) !important; \}/);
   assert.doesNotMatch(page, /contours|Depth contours|estimated depth contours/i);
   assert.doesNotMatch(styles, /\.contours|\.contour-glyph|--print-contour/i);
-  assert.match(styles, /\.route-name-label, \.feature-name-label-print, \.point-annotation-name \{ font-size: var\(--print-primary-text-size\) !important; \}/);
-  assert.match(styles, /\.vector-label \{[^}]*padding:\s*var\(--print-map-label-padding-y\) var\(--print-map-label-padding-x\)/);
-  assert.match(styles, /\.point-annotation-auto \{ transform: translate\(var\(--print-annotation-stack-x\), var\(--annotation-print-y\)\) !important; \}/);
-  assert.match(styles, /\.point-annotation-manual \{ left: var\(--annotation-print-left\) !important; top: var\(--annotation-print-top\) !important; \}/);
+  assert.match(styles, /\.map-stage\.optimized-chart-print \.route-name-label, \.map-stage\.optimized-chart-print \.feature-name-label-print, \.map-stage\.optimized-chart-print \.point-annotation-name \{ font-size: var\(--print-primary-text-size\) !important; \}/);
+  assert.match(styles, /\.map-stage\.optimized-chart-print \.vector-label \{[^}]*padding:\s*var\(--print-map-label-padding-y\) var\(--print-map-label-padding-x\)/);
+  assert.match(styles, /\.map-stage\.optimized-chart-print \.point-annotation-auto \{ transform: translate\(var\(--print-annotation-stack-x\), var\(--annotation-print-y\)\) !important; \}/);
+  assert.match(styles, /\.map-stage\.optimized-chart-print \.point-annotation-manual \{ left: var\(--annotation-print-left\) !important; top: var\(--annotation-print-top\) !important; \}/);
   assert.match(styles, /\.point-annotation-chip \{[^}]*background:\s*rgba\(200,239,238,\.72\)/);
   assert.match(styles, /\.vector-label \{[^}]*text-shadow:\s*none;/);
   assert.match(styles, /\.point-annotation-chip \{[^}]*box-shadow:\s*none;[^}]*text-shadow:\s*none;/);
   assert.match(styles, /\.point-annotation-manual \.point-annotation-chip \{[^}]*box-shadow:\s*none;/);
   assert.match(styles, /\.point-annotation:hover \.point-annotation-chip, \.point-annotation:focus-visible \.point-annotation-chip \{[^}]*outline-color:\s*var\(--coral\);[^}]*box-shadow:\s*none;/);
-  assert.match(styles, /@media print[\s\S]*\.point-annotation-chip \{[^}]*outline:\s*var\(--print-map-label-border\) solid[^}]*box-shadow:\s*none !important;[^}]*text-shadow:\s*none !important;/);
+  assert.match(styles, /@media print[\s\S]*\.map-stage\.optimized-chart-print \.point-annotation-chip \{[^}]*outline:\s*var\(--print-map-label-border\) solid[^}]*box-shadow:\s*none !important;[^}]*text-shadow:\s*none !important;/);
 });
 
 test("exports descriptive names through deterministic smart callout rails", async () => {
@@ -522,7 +522,7 @@ test("exports descriptive names through deterministic smart callout rails", asyn
 
   assert.match(page, /type NamePlacement,/);
   assert.match(page, /normalizeExportSettings\(project\.exportSettings\)/);
-  assert.match(page, /exportSettings\.namePlacement === "asPositioned" \? "asPositioned" : "smartCallouts"/);
+  assert.match(page, /exportSettings\.namePlacement === "smartCallouts" \? "smartCallouts" : "asPositioned"/);
   assert.match(page, /layoutPrintCallouts/);
   assert.match(page, /rightRailCandidate\.layout\.mode === "right"/);
   assert.match(page, /createSmartCalloutCandidate\(dualRailViewport\)/);
@@ -531,8 +531,8 @@ test("exports descriptive names through deterministic smart callout rails", asyn
   assert.match(page, /annotationKind === "pointName" \|\| annotationKind === "name"/);
   assert.match(page, /data-smart-callout-leader=\{callout\.id\}/);
   assert.match(page, /data-smart-callout=\{callout\.id\}/);
-  assert.match(page, />Smart callouts</);
-  assert.match(page, />As positioned</);
+  assert.match(page, />Optimized chart</);
+  assert.match(page, />Match current map</);
   assert.match(page, /type="radio" name="pdf-name-placement" value="smartCallouts"/);
   assert.match(page, /disabled=\{smartCalloutOverflowIds\.length > 0 \|\| isPreparingPrint\}/);
   assert.match(page, /Reduce the print area or hide Names before exporting/);
@@ -544,7 +544,10 @@ test("exports descriptive names through deterministic smart callout rails", asyn
 
   assert.match(styles, /\.print-map-viewport \{ display: contents; \}/);
   assert.match(styles, /\.map-stage, \.map-stage\.has-print-area, \.map-stage\.smart-callout-mode \{[^}]*overflow: hidden !important;[^}]*contain: strict;[^}]*isolation: isolate;[^}]*clip-path: inset\(0\);/);
-  assert.match(styles, /\.print-map-viewport, \.map-stage\.smart-callout-mode \.print-map-viewport \{[^}]*overflow: hidden;[^}]*contain: strict;[^}]*isolation: isolate;[^}]*clip-path: inset\(0\);/);
+  const printViewportRule = styles.match(/\.print-map-viewport, \.map-stage\.smart-callout-mode \.print-map-viewport \{[^}]*\}/)?.[0] ?? "";
+  assert.match(printViewportRule, /overflow: hidden;[^}]*contain: strict;[^}]*isolation: isolate;/);
+  assert.match(printViewportRule, /border: 0;[^}]*outline: 1px solid #6f9299;[^}]*outline-offset: 0;/);
+  assert.doesNotMatch(printViewportRule, /clip-path:/);
   assert.match(styles, /\.smart-callout-leaders polyline \{[^}]*stroke-width: 1\.15px;[^}]*stroke-linecap: round;/);
   assert.match(styles, /\.smart-callout-label \{[^}]*font-size: 12px;[^}]*box-shadow: none;[^}]*text-shadow: none;/);
   assert.match(styles, /\.map-stage\.smart-callout-overflow \.smart-callout-overflow-print/);

@@ -11,6 +11,12 @@ export type PrintProjection = {
   canvasOffsetY: number;
 };
 
+export type ExactPrintClipGeometry = {
+  viewport: PrintViewport;
+  canvasOffsetX: number;
+  canvasOffsetY: number;
+};
+
 export type ScaleBarSpec = {
   value: number;
   printedPixels: number;
@@ -70,6 +76,24 @@ export function createPrintProjection(source: PrintSource, viewport: PrintViewpo
     originY,
     canvasOffsetX: originX - viewport.x - source.x * scale,
     canvasOffsetY: originY - viewport.y - source.y * scale,
+  };
+}
+
+/**
+ * Converts a fitted projection into the exact painted crop box. Letterboxing
+ * stays outside the clipping viewport, and the selected source origin maps
+ * directly to its top-left corner without a border consuming map pixels.
+ */
+export function exactPrintClipGeometry(source: PrintSource, projection: PrintProjection): ExactPrintClipGeometry {
+  return {
+    viewport: {
+      x: projection.originX,
+      y: projection.originY,
+      width: projection.renderedWidth,
+      height: projection.renderedHeight,
+    },
+    canvasOffsetX: -source.x * projection.scale,
+    canvasOffsetY: -source.y * projection.scale,
   };
 }
 

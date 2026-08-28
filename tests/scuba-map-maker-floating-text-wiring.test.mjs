@@ -96,13 +96,13 @@ test("renders independent screen and PDF text with exact inverse-scale typograph
   assert.match(floatingStyle, /"--floating-text-font-size": `\$\{item\.size \/ scale\}px`/);
   assert.match(floatingStyle, /"--floating-text-hit-size": `\$\{44 \/ scale\}px`/);
   assert.match(page, /floatingTextStyle\(item, zoom\)/);
-  assert.match(page, /floatingTextStyle\(item, effectivePrintScale\)/);
+  assert.match(page, /floatingTextStyle\(item, matchCurrentMap \? zoom : effectivePrintScale\)/);
   assert.match(page, /data-floating-text-id=\{item\.id\}/);
   assert.match(page, /floating-text-screen print-hidden/);
   assert.match(page, /floating-text-print screen-hidden/);
-  assert.match(page, /printSettings\.floatingText && pointInPrintArea\(item, printArea\)/);
+  assert.match(page, /printSettings\.floatingText && includeMapPrintAnchor\(item\)/);
   assert.match(styles, /\.floating-text-item \{[^}]*font-size:\s*var\(--floating-text-font-size[^}]*rotate\(var\(--floating-text-angle/s);
-  assert.match(styles, /@media print[\s\S]*\.floating-text-print \{[^}]*text-shadow:\s*none !important;/);
+  assert.match(styles, /@media print[\s\S]*\.map-stage\.optimized-chart-print \.floating-text-print \{[^}]*text-shadow:\s*none !important;/);
   assert.match(printExport, /floatingText: boolean/);
   assert.match(printExport, /floatingText: true/);
   assert.match(page, /\["floatingText", "Floating text"\]/);

@@ -30,6 +30,7 @@ import {
   PRINT_CHART_FRAME,
   chooseScaleBar,
   createPrintProjection,
+  exactPrintClipGeometry,
   formatScaleNumber,
   printViewportFor,
   type PrintSource,
@@ -42,6 +43,7 @@ import {
   buildUsedSymbolLegend,
   effectiveExportSettings,
   normalizeExportSettings,
+  resolveMapViewExportSettings,
   type ExportSettings,
   type ExportToggleKey,
   type NamePlacement,
@@ -1822,7 +1824,10 @@ export default function ScubaMapMaker() {
   const setExportSetting = (setting: ExportToggleKey, value: boolean) => mutate((current) => { current.exportSettings = { ...normalizeExportSettings(current.exportSettings), [setting]: value }; return current; }, false);
   const setNamePlacement = (namePlacement: NamePlacement) => mutate((current) => { current.exportSettings = { ...normalizeExportSettings(current.exportSettings), namePlacement }; return current; }, false);
   const applyExportPreset = (preset: "clean" | "full") => mutate((current) => {
-    current.exportSettings = { ...(preset === "clean" ? CLEAN_CHART_EXPORT_SETTINGS : FULL_DETAIL_EXPORT_SETTINGS) };
+    current.exportSettings = {
+      ...(preset === "clean" ? CLEAN_CHART_EXPORT_SETTINGS : FULL_DETAIL_EXPORT_SETTINGS),
+      namePlacement: normalizeExportSettings(current.exportSettings).namePlacement,
+    };
     return current;
   }, false);
   const openProject = (next: Project) => { projectRef.current = next; setProject(next); autoFitRef.current = true; window.requestAnimationFrame(fitMapToStage); };
@@ -1898,8 +1903,24 @@ export default function ScubaMapMaker() {
 
   const coast = project.coastline;
   const exportSettings = normalizeExportSettings(project.exportSettings);
-  const printSettings = effectiveExportSettings(exportSettings);
-  const namePlacement: NamePlacement = exportSettings.namePlacement === "asPositioned" ? "asPositioned" : "smartCallouts";
+  const namePlacement: NamePlacement = exportSettings.namePlacement === "smartCallouts" ? "smartCallouts" : "asPositioned";
+  const matchCurrentMap = namePlacement === "asPositioned";
+  const printSettings = matchCurrentMap
+    ? resolveMapViewExportSettings({
+        reference: Boolean(project.reference.dataUrl && project.reference.visible),
+        shoreline: visibleLayers.shoreline,
+        geographicFeatures: visibleLayers.geographicFeatures,
+        geographicFeatureLabels: visibleLayers.geographicFeatureLabels,
+        floatingText: visibleLayers.floatingText,
+        routes: visibleLayers.routes,
+        routeLabels: visibleLayers.routeLabels,
+        routeNameLabels: visibleLayers.routeNameLabels,
+        pointNames: visibleLayers.pointNames,
+        names: visibleLayers.names,
+        depths: visibleLayers.depths,
+        mapFurniture: visibleLayers.mapFurniture,
+      }, exportSettings.pointTable)
+    : effectiveExportSettings(exportSettings);
   const printArea = project.printArea;
   const printPoints = project.waypoints.filter((point) => pointInPrintArea(point, printArea));
   const printPointTableChunks = printPoints.length > 20
@@ -1948,6 +1969,10 @@ export default function ScubaMapMaker() {
   const activePrintViewport = smartCalloutCandidate?.viewport ?? basePrintViewport;
   const printProjection = smartCalloutCandidate?.projection ?? createPrintProjection(printSource, activePrintViewport);
   const effectivePrintScale = printProjection.scale;
+  const exactPrintClip = matchCurrentMap ? exactPrintClipGeometry(printSource, printProjection) : null;
+  const printMapViewport = exactPrintClip?.viewport ?? activePrintViewport;
+  const printCanvasOffsetX = exactPrintClip?.canvasOffsetX ?? printProjection.canvasOffsetX;
+  const printCanvasOffsetY = exactPrintClip?.canvasOffsetY ?? printProjection.canvasOffsetY;
   function clampPrintLabelAnchor<T extends { x: number; y: number }>(anchor: T, horizontalPixels = 84, verticalPixels = 24): T {
     const insetX = Math.min(printSource.width / 2, horizontalPixels / effectivePrintScale);
     const insetY = Math.min(printSource.height / 2, verticalPixels / effectivePrintScale);
@@ -1981,14 +2006,14 @@ export default function ScubaMapMaker() {
     "--print-water-label-width": `${Math.max(180, activePrintViewport.width - 78) / effectivePrintScale}px`,
   } as CSSProperties;
   const printStageStyle = {
-    "--print-map-left": `${activePrintViewport.x}px`,
-    "--print-map-top": `${activePrintViewport.y}px`,
-    "--print-map-width": `${activePrintViewport.width}px`,
-    "--print-map-height": `${activePrintViewport.height}px`,
-    "--print-map-right": `${PRINT_CHART_FRAME.width - activePrintViewport.x - activePrintViewport.width}px`,
-    "--print-map-bottom": `${PRINT_CHART_FRAME.height - activePrintViewport.y - activePrintViewport.height}px`,
-    "--print-canvas-offset-x": `${printProjection.canvasOffsetX}px`,
-    "--print-canvas-offset-y": `${printProjection.canvasOffsetY}px`,
+    "--print-map-left": `${printMapViewport.x}px`,
+    "--print-map-top": `${printMapViewport.y}px`,
+    "--print-map-width": `${printMapViewport.width}px`,
+    "--print-map-height": `${printMapViewport.height}px`,
+    "--print-map-right": `${PRINT_CHART_FRAME.width - printMapViewport.x - printMapViewport.width}px`,
+    "--print-map-bottom": `${PRINT_CHART_FRAME.height - printMapViewport.y - printMapViewport.height}px`,
+    "--print-canvas-offset-x": `${printCanvasOffsetX}px`,
+    "--print-canvas-offset-y": `${printCanvasOffsetY}px`,
     "--print-map-scale": String(effectivePrintScale),
     "--print-scale-bar": `${printBar.printedPixels}px`,
   } as CSSProperties;
@@ -2008,6 +2033,7 @@ export default function ScubaMapMaker() {
     }
   };
   const exportClass = (visible: boolean) => visible ? "" : " export-hidden";
+  const includeMapPrintAnchor = (point: { x: number; y: number }) => matchCurrentMap || pointInPrintArea(point, printArea);
   const annotationText = (point: Point, annotationKind: PointAnnotationKind) => {
     if (annotationKind === "pointName") return point.label;
     if (annotationKind === "name") return point.name?.trim() ?? "";
@@ -2020,7 +2046,7 @@ export default function ScubaMapMaker() {
   const annotationScreenVisible = (annotationKind: PointAnnotationKind) => annotationKind === "pointName" ? visibleLayers.pointNames : annotationKind === "name" ? visibleLayers.names : visibleLayers.depths;
   const annotationPrintVisible = (point: Point, annotationKind: PointAnnotationKind) => {
     const enabled = annotationKind === "pointName" ? printSettings.pointNames : annotationKind === "name" ? printSettings.fullPointNames : printSettings.depths;
-    if (!enabled || !pointInPrintArea(point, printArea)) return false;
+    if (!enabled || !includeMapPrintAnchor(point)) return false;
     return !(smartCalloutsActive && smartCalloutPointIds.has(point.id) && (annotationKind === "pointName" || annotationKind === "name"));
   };
   const annotationVisibilityClass = (point: Point, annotationKind: PointAnnotationKind) => `${annotationScreenVisible(annotationKind) ? "" : " screen-hidden"}${exportClass(annotationPrintVisible(point, annotationKind))}`;
@@ -2058,7 +2084,7 @@ export default function ScubaMapMaker() {
   const routeLabelAnchors = routes.flatMap((route) => {
     const nodes = routeNodes(project);
     const screen = routeLabelAnchor(route, nodes, project.vectors);
-    const print = routeLabelAnchor(route, nodes, project.vectors, printArea);
+    const print = matchCurrentMap ? screen : routeLabelAnchor(route, nodes, project.vectors, printArea);
     return screen ? [{ route, screen, print }] : [];
   });
   const geographicFeatureLabels = project.geographicFeatures.flatMap((feature) => {
@@ -2298,7 +2324,7 @@ export default function ScubaMapMaker() {
             <div><span>Soundings dive chart</span><h1>{project.title}</h1></div>
             <time dateTime={project.date}>{formatProjectDate(project.date)}</time>
           </div>
-        <div className={`map-stage ${tool === "select" ? "pan-ready" : ""}${tool === "route" ? " route-draw-active" : ""}${tool === "feature" ? " feature-draw-active" : ""}${tool === "text" ? " text-placement-active" : ""}${printArea ? " has-print-area" : ""}${smartCalloutsActive ? " smart-callout-mode" : ""}${smartCalloutOverflowIds.length ? " smart-callout-overflow" : ""}`} style={printStageStyle} ref={stageRef} tabIndex={0} aria-label="Map navigation surface. Drag blank map space to pan; scroll to zoom; use arrow keys to move around." onPointerDown={onStagePointerDown} onPointerMove={onStagePointerMove} onPointerUp={onStagePointerUp} onPointerCancel={onStagePointerUp} onWheel={onStageWheel}>
+        <div className={`map-stage ${matchCurrentMap ? "match-map-print" : "optimized-chart-print"}${tool === "select" ? " pan-ready" : ""}${tool === "route" ? " route-draw-active" : ""}${tool === "feature" ? " feature-draw-active" : ""}${tool === "text" ? " text-placement-active" : ""}${printArea ? " has-print-area" : ""}${smartCalloutsActive ? " smart-callout-mode" : ""}${smartCalloutOverflowIds.length ? " smart-callout-overflow" : ""}`} style={printStageStyle} ref={stageRef} tabIndex={0} aria-label="Map navigation surface. Drag blank map space to pan; scroll to zoom; use arrow keys to move around." onPointerDown={onStagePointerDown} onPointerMove={onStagePointerMove} onPointerUp={onStagePointerUp} onPointerCancel={onStagePointerUp} onWheel={onStageWheel}>
           <div className="print-map-viewport">
             <div className="map-canvas" style={{ ...printMapDisplayStyle, ...canvasDisplayStyle, transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}>
             <div className="water-label">{project.title.trim().toUpperCase()}</div>
@@ -2341,7 +2367,7 @@ export default function ScubaMapMaker() {
               <defs>
                 <mask id="route-symbol-clearance-mask" className="route-symbol-mask" maskUnits="userSpaceOnUse" maskContentUnits="userSpaceOnUse" x="0" y="0" width={canvasSize.width} height={canvasSize.height}>
                   <rect x="0" y="0" width={canvasSize.width} height={canvasSize.height} fill="white"/>
-                  {routeSymbolPoints.map((point) => <circle className={`route-symbol-cutout${exportClass(printSettings.pointMarkers && pointInPrintArea(point, printArea))}`} data-route-symbol-cutout={point.id} key={point.id} cx={point.x} cy={point.y} fill="black"/>)}
+                  {routeSymbolPoints.map((point) => <circle className={`route-symbol-cutout${exportClass(printSettings.pointMarkers && includeMapPrintAnchor(point))}`} data-route-symbol-cutout={point.id} key={point.id} cx={point.x} cy={point.y} fill="black"/>)}
                 </mask>
               </defs>
               <g className="route-network-ink" mask="url(#route-symbol-clearance-mask)">
@@ -2390,15 +2416,15 @@ export default function ScubaMapMaker() {
                 onPointerDown={(event) => event.stopPropagation()}
                 onClick={(event) => { event.stopPropagation(); focusRoute(route); }}
               ><span>{route.name}</span></button>
-              {print && <span className={`route-name-label route-name-label-print screen-hidden${exportClass(printSettings.routeNameLabels)}`} style={routeNameLabelStyle(clampPrintLabelAnchor(print))} aria-label={`Route ${route.name}`}><span>{route.name}</span></span>}
+              {print && <span className={`route-name-label route-name-label-print screen-hidden${exportClass(printSettings.routeNameLabels)}`} style={routeNameLabelStyle(matchCurrentMap ? print : clampPrintLabelAnchor(print))} aria-label={`Route ${route.name}`}><span>{route.name}</span></span>}
             </Fragment>)}
             {geographicFeatureLabels.map(({ feature, name, anchor }, featureLabelIndex) => <Fragment key={`feature-name-${feature.id}`}>
               <button className={`feature-name-label print-hidden${visibleLayers.geographicFeatureLabels ? "" : " screen-hidden"}`} style={featureNameLabelStyle(anchor)} aria-label={`Map feature ${name}`} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); selectGeographicFeature(feature.id); }}><span>{name}</span></button>
-              {pointInPrintArea(anchor, printArea) && <span className={`feature-name-label feature-name-label-print screen-hidden${printFeatureLabelBelow(anchor, featureLabelIndex) ? " feature-name-label-below" : ""}${exportClass(printSettings.geographicFeatureLabels)}`} style={featureNameLabelStyle(clampPrintLabelAnchor(anchor, 84, 60))} aria-label={`Map feature ${name}`}><span>{name}</span></span>}
+              {includeMapPrintAnchor(anchor) && <span className={`feature-name-label feature-name-label-print screen-hidden${!matchCurrentMap && printFeatureLabelBelow(anchor, featureLabelIndex) ? " feature-name-label-below" : ""}${exportClass(printSettings.geographicFeatureLabels)}`} style={featureNameLabelStyle(matchCurrentMap ? anchor : clampPrintLabelAnchor(anchor, 84, 60))} aria-label={`Map feature ${name}`}><span>{name}</span></span>}
             </Fragment>)}
             {project.floatingTexts.map((item) => <Fragment key={item.id}>
               <button data-floating-text-id={item.id} className={`floating-text-item floating-text-screen print-hidden${selectedFeatureId === item.id ? " selected" : ""}${visibleLayers.floatingText ? "" : " screen-hidden"}`} style={floatingTextStyle(item, zoom)} aria-label={`Move floating text: ${item.text}. Use arrow keys for fine positioning.`} onPointerDown={(event) => startFloatingTextDrag(event, item.id)} onClick={(event) => { event.stopPropagation(); selectFloatingText(item.id); }} onKeyDown={(event) => nudgeFloatingText(event, item.id)}><span>{item.text || "Text"}</span></button>
-              <span className={`floating-text-item floating-text-print screen-hidden${exportClass(printSettings.floatingText && pointInPrintArea(item, printArea))}`} style={floatingTextStyle(item, effectivePrintScale)} aria-label={`Floating text: ${item.text}`}><span>{item.text || "Text"}</span></span>
+              <span className={`floating-text-item floating-text-print screen-hidden${exportClass(printSettings.floatingText && includeMapPrintAnchor(item))}`} style={floatingTextStyle(item, matchCurrentMap ? zoom : effectivePrintScale)} aria-label={`Floating text: ${item.text}`}><span>{item.text || "Text"}</span></span>
             </Fragment>)}
             {manualAnnotations.length > 0 && <svg className="point-leaders" style={annotationDisplayStyle} viewBox={`0 0 ${canvasSize.width} ${canvasSize.height}`} shapeRendering="geometricPrecision" aria-hidden="true">
               {manualAnnotations.map(({ point, annotationKind, offset }) => {
@@ -2407,7 +2433,7 @@ export default function ScubaMapMaker() {
                 const screenDistance = Math.hypot(offset.dx, offset.dy) * zoom;
                 return <Fragment key={`${point.id}-${annotationKind}`}>
                   {screenDistance >= 8 && <line className={`point-leader point-leader-${annotationKind} point-leader-screen print-hidden${annotationScreenVisible(annotationKind) ? "" : " screen-hidden"}`} x1={point.x} y1={point.y} x2={screenEnd.x} y2={screenEnd.y}/>}
-                  {screenDistance >= 6 && <line
+                  {screenDistance >= (matchCurrentMap ? 8 : 6) && <line
                     className={`point-leader point-leader-${annotationKind} point-leader-print screen-hidden${exportClass(annotationPrintVisible(point, annotationKind))}`}
                     x1={point.x}
                     y1={point.y}
@@ -2419,7 +2445,7 @@ export default function ScubaMapMaker() {
             </svg>}
             {project.waypoints.map((point) => {
               const displayName = point.name?.trim() ?? "";
-              return <button key={point.id} aria-label={displayName ? `Edit ${point.label} — ${displayName}` : `Edit point of interest ${point.label}`} className={`waypoint named-point${point.symbol ? " has-symbol" : ""}${selectedId === point.id ? " selected" : ""}${exportClass(pointInPrintArea(point, printArea))}`} style={{ ...waypointDisplayStyle, left: point.x, top: point.y }} onClick={(event) => { event.stopPropagation(); setSelectedId(point.id); setSelectedVectorId(null); setSelectedRouteId(null); setSelectedRouteVertexId(null); setSurveyTab("points"); setActivePanel("survey"); setTool("select"); }} onPointerDown={(event) => startDrag(event, "waypoint", point.id)}>
+              return <button key={point.id} aria-label={displayName ? `Edit ${point.label} — ${displayName}` : `Edit point of interest ${point.label}`} className={`waypoint named-point${point.symbol ? " has-symbol" : ""}${selectedId === point.id ? " selected" : ""}${exportClass(includeMapPrintAnchor(point))}`} style={{ ...waypointDisplayStyle, left: point.x, top: point.y }} onClick={(event) => { event.stopPropagation(); setSelectedId(point.id); setSelectedVectorId(null); setSelectedRouteId(null); setSelectedRouteVertexId(null); setSurveyTab("points"); setActivePanel("survey"); setTool("select"); }} onPointerDown={(event) => startDrag(event, "waypoint", point.id)}>
                 {point.symbol ? <PointSymbolImage className={`point-symbol-marker${exportClass(printSettings.pointMarkers)}`} symbol={point.symbol}/> : <span className={`point-dot${exportClass(printSettings.pointMarkers)}`}/>}
               </button>;
             })}
@@ -2538,7 +2564,7 @@ export default function ScubaMapMaker() {
           {activePanel && <aside className={`drawer-shell print-hidden${activePanel === "survey" ? " survey-drawer" : ""}`} onWheel={(event) => event.stopPropagation()}>
             {activePanel === "projects" && <><PanelHeading icon="folder" title="Projects" onClose={() => setActivePanel(null)}/><div className="drawer-body"><label>Current project<select value={project.id} onChange={(event) => selectProject(event.target.value)}>{projects.map((item) => <option value={item.id} key={item.id}>{item.title}</option>)}</select></label><button className="primary-button" onClick={newProject}>New project</button><div className="drawer-section"><h3>Project actions</h3><button className="action-row" onClick={duplicateProject}><SoundingsIcon name="duplicate"/><span><b>Duplicate</b><small>Create an editable copy</small></span></button><button className="action-row" onClick={exportBackup}><SoundingsIcon name="export"/><span><b>Download backup</b><small>Save this project as JSON</small></span></button><label className="action-row file-action"><SoundingsIcon name="upload"/><span><b>Import backup</b><small>Open a Soundings JSON file</small></span><input type="file" accept="application/json" onChange={importBackup}/></label></div><div className="drawer-section field-handoff"><h3>Field capture handoff</h3><p className="drawer-copy">Move point observations between a phone and desktop without changing route topology.</p><button className="action-row" onClick={exportFieldCapture}><SoundingsIcon name="export"/><span><b>Share field capture</b><small>Download points and draft measurements</small></span></button><label className="action-row file-action"><SoundingsIcon name="upload"/><span><b>Merge field capture</b><small>Review a mobile capture package</small></span><input type="file" accept="application/json" onChange={importFieldCapture}/></label></div><button className="danger-button drawer-danger" onClick={deleteProject}><SoundingsIcon name="trash"/>Delete project</button></div></>}
 
-            {activePanel === "settings" && <><PanelHeading icon="settings" title="Settings" onClose={() => setActivePanel(null)}/><div className="drawer-body"><div className="drawer-section first"><h3>Dive site</h3><label>Title<input value={project.title} aria-label="Dive site title" onChange={(event) => mutate((current) => ({ ...current, title: event.target.value }), false)}/></label><label>Date<input type="date" value={project.date} onChange={(event) => mutate((current) => ({ ...current, date: event.target.value }), false)}/></label><div className="field-grid"><label>Distance unit<select value={project.distanceUnit} onChange={(event) => changeDistanceUnit(event.target.value as Unit)}>{Object.entries(UNIT_LABEL).map(([value, name]) => <option value={value} key={value}>{name}</option>)}</select></label><label>Depth unit<select value={project.depthUnit} onChange={(event) => mutate((current) => ({ ...current, depthUnit: event.target.value as Unit }), false)}>{Object.entries(UNIT_LABEL).map(([value, name]) => <option value={value} key={value}>{name}</option>)}</select></label></div><label>Notes<textarea value={project.notes} placeholder="Dive conditions or site notes" onChange={(event) => mutate((current) => ({ ...current, notes: event.target.value }), false)}/></label></div><div className="drawer-section"><h3>Map visuals</h3><div className="range-label"><span>Icon size</span><output htmlFor="point-symbol-scale">{Math.round(pointSymbolScale * 100)}%</output></div><input id="point-symbol-scale" aria-label="Map icon size" type="range" min={MIN_POINT_SYMBOL_SCALE} max={MAX_POINT_SYMBOL_SCALE} step="0.1" value={pointSymbolScale} onChange={(event) => mutate((current) => ({ ...current, pointSymbolScale: normalizePointSymbolScale(Number(event.target.value)) }), false)}/><label>Full size at<select id="visual-scale-stop-zoom" aria-label="Point and route labels full-size zoom" value={visualScaleStopZoom} onChange={(event) => setVisualScaleStopZoom(Number(event.target.value))}>{VISUAL_SCALE_STOP_ZOOM_OPTIONS.map((value) => <option value={value} key={value}>{Math.round(value * 100)}% zoom</option>)}</select></label><p className="drawer-copy">Point markers, point labels, and route names grow with the map until this zoom, then stay the same size on screen. Lower values keep them larger when zoomed out. PDF output is unchanged.</p></div><div className="drawer-section"><h3>Reference image</h3><label className="upload-button"><SoundingsIcon name="image"/>{project.reference.dataUrl ? "Replace reference" : "Upload reference image"}<input type="file" accept="image/*" onChange={onReferenceUpload}/></label>{project.reference.dataUrl && <><div className="range-label"><span>Opacity</span><output>{Math.round(project.reference.opacity * 100)}%</output></div><input type="range" min="0" max="1" step="0.05" value={project.reference.opacity} onChange={(event) => mutate((current) => ({ ...current, reference: { ...current.reference, opacity: Number(event.target.value) } }), false)}/><div className="range-label"><span>Size</span><output>{project.reference.scale.toFixed(1)}×</output></div><input type="range" min="0.4" max="2.4" step="0.1" value={project.reference.scale} onChange={(event) => mutate((current) => ({ ...current, reference: { ...current.reference, scale: Number(event.target.value) } }), false)}/><div className="button-row"><button className={tool === "reference" ? "active" : ""} onClick={() => { setTool("reference"); setActivePanel(null); }}><SoundingsIcon name="select"/>Move</button><button onClick={() => mutate((current) => ({ ...current, reference: { ...current.reference, locked: !current.reference.locked } }))}><SoundingsIcon name={project.reference.locked ? "unlock" : "lock"}/>{project.reference.locked ? "Unlock" : "Lock"}</button></div></>}</div><div className="drawer-section"><h3>Shoreline</h3><button className="action-row" onClick={toggleShoreLock}><SoundingsIcon name={project.shoreLocked ? "unlock" : "lock"}/><span><b>{project.shoreLocked ? "Unlock shore" : "Lock shore"}</b><small>{project.shoreLocked ? "Allow drawing and adjustment" : "Protect the finished trace"}</small></span></button>{coast.length >= 3 && <button className="danger-button" onClick={() => mutate((current) => { current.coastline = []; return current; })}><SoundingsIcon name="trash"/>Clear shoreline</button>}</div></div></>}
+            {activePanel === "settings" && <><PanelHeading icon="settings" title="Settings" onClose={() => setActivePanel(null)}/><div className="drawer-body"><div className="drawer-section first"><h3>Dive site</h3><label>Title<input value={project.title} aria-label="Dive site title" onChange={(event) => mutate((current) => ({ ...current, title: event.target.value }), false)}/></label><label>Date<input type="date" value={project.date} onChange={(event) => mutate((current) => ({ ...current, date: event.target.value }), false)}/></label><div className="field-grid"><label>Distance unit<select value={project.distanceUnit} onChange={(event) => changeDistanceUnit(event.target.value as Unit)}>{Object.entries(UNIT_LABEL).map(([value, name]) => <option value={value} key={value}>{name}</option>)}</select></label><label>Depth unit<select value={project.depthUnit} onChange={(event) => mutate((current) => ({ ...current, depthUnit: event.target.value as Unit }), false)}>{Object.entries(UNIT_LABEL).map(([value, name]) => <option value={value} key={value}>{name}</option>)}</select></label></div><label>Notes<textarea value={project.notes} placeholder="Dive conditions or site notes" onChange={(event) => mutate((current) => ({ ...current, notes: event.target.value }), false)}/></label></div><div className="drawer-section"><h3>Map visuals</h3><div className="range-label"><span>Icon size</span><output htmlFor="point-symbol-scale">{Math.round(pointSymbolScale * 100)}%</output></div><input id="point-symbol-scale" aria-label="Map icon size" type="range" min={MIN_POINT_SYMBOL_SCALE} max={MAX_POINT_SYMBOL_SCALE} step="0.1" value={pointSymbolScale} onChange={(event) => mutate((current) => ({ ...current, pointSymbolScale: normalizePointSymbolScale(Number(event.target.value)) }), false)}/><label>Full size at<select id="visual-scale-stop-zoom" aria-label="Point and route labels full-size zoom" value={visualScaleStopZoom} onChange={(event) => setVisualScaleStopZoom(Number(event.target.value))}>{VISUAL_SCALE_STOP_ZOOM_OPTIONS.map((value) => <option value={value} key={value}>{Math.round(value * 100)}% zoom</option>)}</select></label><p className="drawer-copy">Point markers, point labels, and route names grow with the map until this zoom, then stay the same size on screen. Lower values keep them larger when zoomed out. Match current map uses these proportions in the PDF.</p></div><div className="drawer-section"><h3>Reference image</h3><label className="upload-button"><SoundingsIcon name="image"/>{project.reference.dataUrl ? "Replace reference" : "Upload reference image"}<input type="file" accept="image/*" onChange={onReferenceUpload}/></label>{project.reference.dataUrl && <><div className="range-label"><span>Opacity</span><output>{Math.round(project.reference.opacity * 100)}%</output></div><input type="range" min="0" max="1" step="0.05" value={project.reference.opacity} onChange={(event) => mutate((current) => ({ ...current, reference: { ...current.reference, opacity: Number(event.target.value) } }), false)}/><div className="range-label"><span>Size</span><output>{project.reference.scale.toFixed(1)}×</output></div><input type="range" min="0.4" max="2.4" step="0.1" value={project.reference.scale} onChange={(event) => mutate((current) => ({ ...current, reference: { ...current.reference, scale: Number(event.target.value) } }), false)}/><div className="button-row"><button className={tool === "reference" ? "active" : ""} onClick={() => { setTool("reference"); setActivePanel(null); }}><SoundingsIcon name="select"/>Move</button><button onClick={() => mutate((current) => ({ ...current, reference: { ...current.reference, locked: !current.reference.locked } }))}><SoundingsIcon name={project.reference.locked ? "unlock" : "lock"}/>{project.reference.locked ? "Unlock" : "Lock"}</button></div></>}</div><div className="drawer-section"><h3>Shoreline</h3><button className="action-row" onClick={toggleShoreLock}><SoundingsIcon name={project.shoreLocked ? "unlock" : "lock"}/><span><b>{project.shoreLocked ? "Unlock shore" : "Lock shore"}</b><small>{project.shoreLocked ? "Allow drawing and adjustment" : "Protect the finished trace"}</small></span></button>{coast.length >= 3 && <button className="danger-button" onClick={() => mutate((current) => { current.coastline = []; return current; })}><SoundingsIcon name="trash"/>Clear shoreline</button>}</div></div></>}
 
             {activePanel === "survey" && <>
               <PanelHeading icon="route" title="Survey" onClose={() => setActivePanel(null)}/>
@@ -2605,29 +2631,36 @@ export default function ScubaMapMaker() {
               <div className="drawer-body">
                 <p className="drawer-copy lead">Choose the crop and detail included when you print or save a PDF.</p>
                 <div className="print-area-controls"><button className={tool === "printArea" ? "active" : ""} onClick={() => { setTool("printArea"); setActivePanel(null); setNotice("Drag a rectangle over the map to set the PDF print area."); }}>{printArea ? "Redraw print area" : "Set print area"}</button>{printArea && <button onClick={() => mutate((current) => { delete current.printArea; return current; })}>Clear print area</button>}</div>
-                {printArea && <p className="print-area-note">Selected area: {Math.round(printArea.width)} × {Math.round(printArea.height)} map pixels · {printPoints.length} point{printPoints.length === 1 ? "" : "s"} in PDF</p>}
-                <div className="drawer-section export-presets">
-                  <h3>Readability presets</h3>
-                  <div className="button-row"><button onClick={() => applyExportPreset("clean")}>Clean chart</button><button onClick={() => applyExportPreset("full")}>Full survey detail</button></div>
-                  <p className="drawer-copy">Presets update the existing layer choices; no extra preset is saved with the project.</p>
-                </div>
-                <div className="drawer-section export-settings">
-                  <h3>PDF layers</h3>
-                  <div className="export-grid">{([ ["reference", "Reference image"], ["shoreline", "Shoreline"], ["geographicFeatures", "Map features"], ["geographicFeatureLabels", "Feature labels"], ["floatingText", "Floating text"], ["routes", "Route lines"], ["routeLabels", "Route bearings & distances"], ["routeNameLabels", "Named route labels"], ["pointMarkers", "Point markers"], ["pointNames", "Point Names (P1, P2)"], ["fullPointNames", "Names (Swim platform)"], ["depths", "Depths"], ["mapFurniture", "North arrow & scale"], ["pointTable", "Details appendix"] ] as Array<[ExportToggleKey, string]>).map(([setting, label]) => {
-                    const disabled = (setting === "routeLabels" || setting === "routeNameLabels") ? !exportSettings.routes : setting === "geographicFeatureLabels" ? !exportSettings.geographicFeatures : false;
-                    return <label className={disabled ? "dependent-disabled" : ""} key={setting}><input type="checkbox" checked={exportSettings[setting]} disabled={disabled} onChange={(event) => setExportSetting(setting, event.target.checked)}/>{label}</label>;
-                  })}</div>
-                </div>
+                {printArea && <p className="print-area-note">Selected area: {Math.round(printArea.width)} × {Math.round(printArea.height)} map pixels{matchCurrentMap ? "" : ` · ${printPoints.length} point${printPoints.length === 1 ? "" : "s"} in PDF`}</p>}
                 <div className="drawer-section name-placement-section">
-                  <h3>Name placement</h3>
-                  <div className="name-placement-options" role="radiogroup" aria-label="PDF name placement">
-                    <label className={namePlacement === "smartCallouts" ? "active" : ""}><input className="name-placement-radio" type="radio" name="pdf-name-placement" value="smartCallouts" checked={namePlacement === "smartCallouts"} onChange={() => setNamePlacement("smartCallouts")}/><span><b>Smart callouts</b><small>Moves Names into connected side rails so they stay clear of the map.</small></span></label>
-                    <label className={namePlacement === "asPositioned" ? "active" : ""}><input className="name-placement-radio" type="radio" name="pdf-name-placement" value="asPositioned" checked={namePlacement === "asPositioned"} onChange={() => setNamePlacement("asPositioned")}/><span><b>As positioned</b><small>Uses the Name positions you arranged on the working map.</small></span></label>
+                  <h3>PDF layout</h3>
+                  <div className="name-placement-options" role="radiogroup" aria-label="PDF layout">
+                    <label className={namePlacement === "asPositioned" ? "active" : ""}><input className="name-placement-radio" type="radio" name="pdf-name-placement" value="asPositioned" checked={namePlacement === "asPositioned"} onChange={() => setNamePlacement("asPositioned")}/><span><b>Match current map</b><small>Prints the visible map layers at their current positions and proportions.</small></span></label>
+                    <label className={namePlacement === "smartCallouts" ? "active" : ""}><input className="name-placement-radio" type="radio" name="pdf-name-placement" value="smartCallouts" checked={namePlacement === "smartCallouts"} onChange={() => setNamePlacement("smartCallouts")}/><span><b>Optimized chart</b><small>Uses independent PDF layers and smart callouts for page readability.</small></span></label>
                   </div>
                 </div>
+                {matchCurrentMap ? <div className="drawer-section export-settings current-map-export-settings">
+                  <h3>Map layers</h3>
+                  <p className="drawer-copy">The PDF uses the layers currently visible on the map. Point markers remain visible, just as they do in the editor.</p>
+                  <button className="secondary-button full-width" onClick={() => { setLayersOpen(true); setActivePanel(null); }}><SoundingsIcon name="layers"/>Change map layers</button>
+                  <div className="export-grid appendix-only-toggle"><label><input type="checkbox" checked={exportSettings.pointTable} onChange={(event) => setExportSetting("pointTable", event.target.checked)}/>Details appendix</label></div>
+                </div> : <>
+                  <div className="drawer-section export-presets">
+                    <h3>Readability presets</h3>
+                    <div className="button-row"><button onClick={() => applyExportPreset("clean")}>Clean chart</button><button onClick={() => applyExportPreset("full")}>Full survey detail</button></div>
+                    <p className="drawer-copy">Presets update the existing layer choices without changing the PDF layout.</p>
+                  </div>
+                  <div className="drawer-section export-settings">
+                    <h3>PDF layers</h3>
+                    <div className="export-grid">{([ ["reference", "Reference image"], ["shoreline", "Shoreline"], ["geographicFeatures", "Map features"], ["geographicFeatureLabels", "Feature labels"], ["floatingText", "Floating text"], ["routes", "Route lines"], ["routeLabels", "Route bearings & distances"], ["routeNameLabels", "Named route labels"], ["pointMarkers", "Point markers"], ["pointNames", "Point Names (P1, P2)"], ["fullPointNames", "Names (Swim platform)"], ["depths", "Depths"], ["mapFurniture", "North arrow & scale"], ["pointTable", "Details appendix"] ] as Array<[ExportToggleKey, string]>).map(([setting, label]) => {
+                      const disabled = (setting === "routeLabels" || setting === "routeNameLabels") ? !exportSettings.routes : setting === "geographicFeatureLabels" ? !exportSettings.geographicFeatures : false;
+                      return <label className={disabled ? "dependent-disabled" : ""} key={setting}><input type="checkbox" checked={exportSettings[setting]} disabled={disabled} onChange={(event) => setExportSetting(setting, event.target.checked)}/>{label}</label>;
+                    })}</div>
+                  </div>
+                </>}
                 {smartCalloutOverflowIds.length > 0 && <p className="callout-overflow-message" id="callout-overflow-message" role="alert"><b>{smartCalloutOverflowIds.length} Name{smartCalloutOverflowIds.length === 1 ? "" : "s"} need more room.</b> Reduce the print area or hide Names before exporting.</p>}
                 <button className="primary-button export-print" disabled={smartCalloutOverflowIds.length > 0 || isPreparingPrint} aria-describedby={smartCalloutOverflowIds.length ? "callout-overflow-message" : undefined} onClick={() => void prepareAndPrint()}><SoundingsIcon name="export"/>{isPreparingPrint ? "Preparing PDF…" : "Print / Save PDF"}</button>
-                <p className="print-note">{smartCalloutsActive ? "Names will print in connected callout rails." : "Print with selected settings"}</p>
+                <p className="print-note">{matchCurrentMap ? "Prints the current map layers inside the selected area." : smartCalloutsActive ? "Names will print in connected callout rails." : "Print with selected settings"}</p>
               </div>
             </>}
           </aside>}

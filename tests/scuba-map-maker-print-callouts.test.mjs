@@ -29,6 +29,7 @@ test("fits the deterministic dense fixture in three-line dual rails without trun
     })),
     metrics: { railGap: 12, fontSize: 12, characterWidth: 7.3, lineHeight: 14, paddingX: 5, paddingY: 4 },
   });
+  assert.equal(result.mode, "both");
   assert.deepEqual(result.overflowIds, []);
   assert.equal(result.callouts.length, names.length);
   assert.ok(result.callouts.every((callout) => callout.lines.length >= 1 && callout.lines.length <= 3));
@@ -38,4 +39,49 @@ test("fits the deterministic dense fixture in three-line dual rails without trun
       assert.ok(entries[index].box.y >= entries[index - 1].box.y + entries[index - 1].box.height + 4 - 1e-9);
     }
   }
+});
+
+test("keeps a small optimized layout on the right rail", () => {
+  const viewport = printViewportFor("rightRail");
+  const result = layoutPrintCallouts({
+    frame: PRINT_CHART_FRAME,
+    mapViewport: viewport,
+    railWidth: PRINT_CALLOUT_RAIL_WIDTH,
+    points: [
+      { id: "p1", text: "P1 · Swim platform", x: 220, y: 140 },
+      { id: "p2", text: "P2 · Training wreck", x: 420, y: 320 },
+      { id: "p3", text: "P3 · Return line", x: 680, y: 500 },
+    ],
+    metrics: { railGap: 12, fontSize: 12, characterWidth: 7.3, lineHeight: 14, paddingX: 5, paddingY: 4 },
+  });
+
+  assert.equal(result.mode, "right");
+  assert.deepEqual(result.overflowIds, []);
+  assert.deepEqual(result.callouts.map((callout) => callout.side), ["right", "right", "right"]);
+});
+
+test("reports deterministic optimized overflow for unwrappable and over-capacity labels", () => {
+  const viewport = printViewportFor("dualRail");
+  const points = Array.from({ length: 60 }, (_, index) => ({
+    id: `dense-${String(index).padStart(2, "0")}`,
+    text: `P${index + 1} · Dense named waypoint`,
+    x: viewport.x + 30 + (index % 2) * (viewport.width - 60),
+    y: viewport.y + 20 + (index % 20) * 28,
+  }));
+  points.push({ id: "unwrappable", text: "W".repeat(300), x: viewport.x + viewport.width / 2, y: viewport.y + viewport.height / 2 });
+
+  const result = layoutPrintCallouts({
+    frame: PRINT_CHART_FRAME,
+    mapViewport: viewport,
+    railWidth: PRINT_CALLOUT_RAIL_WIDTH,
+    points,
+    metrics: { railGap: 12, fontSize: 12, characterWidth: 7.3, lineHeight: 14, paddingX: 5, paddingY: 4 },
+  });
+
+  assert.equal(result.mode, "both");
+  assert.ok(result.overflowIds.length > 0);
+  assert.ok(result.overflowIds.includes("unwrappable"));
+  assert.deepEqual(result.overflowIds, [...result.overflowIds].sort());
+  assert.equal(result.callouts.length + result.overflowIds.length, points.length);
+  assert.equal(new Set([...result.callouts.map((callout) => callout.id), ...result.overflowIds]).size, points.length);
 });

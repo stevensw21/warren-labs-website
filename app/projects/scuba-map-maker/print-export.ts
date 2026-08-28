@@ -38,7 +38,7 @@ export const FULL_DETAIL_EXPORT_SETTINGS: Readonly<ExportSettings> = Object.free
   depths: true,
   mapFurniture: true,
   pointTable: true,
-  namePlacement: "smartCallouts",
+  namePlacement: "asPositioned",
 });
 
 export const CLEAN_CHART_EXPORT_SETTINGS: Readonly<ExportSettings> = Object.freeze({
@@ -52,7 +52,7 @@ type LegacyExportSettings = Partial<ExportSettings> & { contours?: unknown };
 export function normalizeExportSettings(saved?: LegacyExportSettings): ExportSettings {
   const source = { ...(saved ?? {}) };
   delete source.contours;
-  const namePlacement: NamePlacement = source.namePlacement === "asPositioned" ? "asPositioned" : "smartCallouts";
+  const namePlacement: NamePlacement = source.namePlacement === "smartCallouts" ? "smartCallouts" : "asPositioned";
   const routeNameLabels = source.routeNameLabels ?? source.routeLabels ?? FULL_DETAIL_EXPORT_SETTINGS.routeNameLabels;
   return { ...FULL_DETAIL_EXPORT_SETTINGS, ...source, routeNameLabels, namePlacement };
 }
@@ -63,6 +63,42 @@ export function effectiveExportSettings(settings: ExportSettings): ExportSetting
     routeLabels: settings.routes && settings.routeLabels,
     routeNameLabels: settings.routes && settings.routeNameLabels,
     geographicFeatureLabels: settings.geographicFeatures && settings.geographicFeatureLabels,
+  };
+}
+
+export type MapViewLayers = {
+  reference: boolean;
+  shoreline: boolean;
+  geographicFeatures: boolean;
+  geographicFeatureLabels: boolean;
+  floatingText: boolean;
+  routes: boolean;
+  routeLabels: boolean;
+  routeNameLabels: boolean;
+  pointNames: boolean;
+  names: boolean;
+  depths: boolean;
+  mapFurniture: boolean;
+};
+
+export function resolveMapViewExportSettings(layers: MapViewLayers, pointTable: boolean): ExportSettings {
+  return {
+    reference: layers.reference,
+    shoreline: layers.shoreline,
+    geographicFeatures: layers.geographicFeatures,
+    geographicFeatureLabels: layers.geographicFeatureLabels,
+    floatingText: layers.floatingText,
+    routes: layers.routes,
+    routeLabels: layers.routeLabels,
+    routeNameLabels: layers.routeNameLabels,
+    pointMarkers: true,
+    namedPointMarkersOnly: false,
+    pointNames: layers.pointNames,
+    fullPointNames: layers.names,
+    depths: layers.depths,
+    mapFurniture: layers.mapFurniture,
+    pointTable,
+    namePlacement: "asPositioned",
   };
 }
 

@@ -1,0 +1,97 @@
+{
+  "version": 2,
+  "id": "wysiwyg-regression-fixture",
+  "title": "WYSIWYG Edge Regression",
+  "date": "2026-08-27",
+  "notes": "Synthetic local-only fixture for exact crop, layer, and appendix validation.",
+  "distanceUnit": "ft",
+  "depthUnit": "ft",
+  "canvasSize": { "width": 1200, "height": 800 },
+  "printArea": { "x": 400, "y": 260, "width": 376, "height": 244 },
+  "calibration": { "metersPerPixel": 0.5 },
+  "pointSymbolScale": 1,
+  "visualScaleStopZoom": 4,
+  "shoreLocked": true,
+  "coastline": [
+    { "id": "coast-nw", "x": 350, "y": 210 },
+    { "id": "coast-ne", "x": 830, "y": 210 },
+    { "id": "coast-se", "x": 830, "y": 550 },
+    { "id": "coast-sw", "x": 350, "y": 550 }
+  ],
+  "geographicFeatures": [
+    {
+      "id": "feature-horizontal-edges",
+      "name": "Horizontal edge crossing",
+      "mode": "polyline",
+      "closed": false,
+      "style": { "color": "#c14c3b", "width": 5, "dash": "dashed" },
+      "points": [
+        { "id": "fh-1", "x": 360, "y": 315 },
+        { "id": "fh-2", "x": 570, "y": 340 },
+        { "id": "fh-3", "x": 820, "y": 300 }
+      ]
+    },
+    {
+      "id": "feature-vertical-edges",
+      "name": "Vertical edge crossing",
+      "mode": "spline",
+      "closed": false,
+      "style": { "color": "#4164a8", "width": 3, "dash": "dotted" },
+      "points": [
+        { "id": "fv-1", "x": 610, "y": 220 },
+        { "id": "fv-2", "x": 630, "y": 380 },
+        { "id": "fv-3", "x": 590, "y": 545 }
+      ]
+    }
+  ],
+  "floatingTexts": [
+    { "id": "floating-rotated-edge", "text": "ROTATED EDGE", "x": 398, "y": 420, "size": 28, "rotation": -32 },
+    { "id": "floating-center", "text": "CENTER TEXT", "x": 590, "y": 385, "size": 22, "rotation": 17 }
+  ],
+  "waypoints": [
+    { "id": "p12", "label": "P12", "name": "", "x": 500, "y": 330, "depth": 31 },
+    { "id": "p13", "label": "P13", "name": "", "x": 540, "y": 375, "depth": 36 },
+    { "id": "named-symbol", "label": "P14", "name": "Named wreck", "symbol": "shipwreck", "x": 650, "y": 360, "depth": 42, "labelOffsets": { "name": { "dx": 34, "dy": -22 }, "depth": { "dx": 28, "dy": 19 } } },
+    { "id": "left-edge-marker", "label": "EDGE-L", "name": "Left overlap", "x": 399.5, "y": 300, "depth": 10 },
+    { "id": "right-edge-marker", "label": "EDGE-R", "name": "Right overlap", "x": 776.5, "y": 350, "depth": 11 },
+    { "id": "top-edge-marker", "label": "EDGE-T", "name": "Top overlap", "x": 510, "y": 259.5, "depth": 12 },
+    { "id": "bottom-edge-marker", "label": "EDGE-B", "name": "Bottom overlap", "x": 700, "y": 504.5, "depth": 13 },
+    { "id": "outside-manual-label", "label": "OUTSIDE", "name": "Manual label inside", "x": 390, "y": 455, "depth": 18, "labelOffsets": { "name": { "dx": 42, "dy": 0 } } }
+  ],
+  "routeVertices": [
+    { "id": "route-left", "x": 360, "y": 460 },
+    { "id": "route-center", "x": 590, "y": 430 },
+    { "id": "route-right", "x": 820, "y": 470 },
+    { "id": "route-top", "x": 590, "y": 220 },
+    { "id": "route-bottom", "x": 590, "y": 550 }
+  ],
+  "vectors": [
+    { "id": "route-h1", "fromId": "route-left", "toId": "route-center", "bearing": 82, "distance": 120, "unit": "ft" },
+    { "id": "route-h2", "fromId": "route-center", "toId": "route-right", "bearing": 100, "distance": 121, "unit": "ft" },
+    { "id": "route-v1", "fromId": "route-top", "toId": "route-center", "bearing": 180, "distance": 110, "unit": "ft" },
+    { "id": "route-v2", "fromId": "route-center", "toId": "route-bottom", "bearing": 180, "distance": 112, "unit": "ft" }
+  ],
+  "routes": [
+    { "id": "route-horizontal", "name": "Horizontal crop route", "steps": [ { "vectorId": "route-h1", "reversed": false }, { "vectorId": "route-h2", "reversed": false } ] },
+    { "id": "route-vertical", "name": "Vertical crop route", "steps": [ { "vectorId": "route-v1", "reversed": false }, { "vectorId": "route-v2", "reversed": false } ] }
+  ],
+  "reference": { "dataUrl": "data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%201200%20800'%3E%3Crect%20width='1200'%20height='800'%20fill='%23d9edf0'/%3E%3Cpath%20d='M0%200L1200%20800M1200%200L0%20800'%20stroke='%2388a5aa'%20stroke-width='10'/%3E%3C/svg%3E", "opacity": 0.73, "scale": 1, "x": 0, "y": 0, "visible": true, "locked": true, "frame": { "width": 1200, "height": 800 } },
+  "exportSettings": {
+    "reference": false,
+    "shoreline": true,
+    "geographicFeatures": true,
+    "geographicFeatureLabels": true,
+    "floatingText": true,
+    "routes": true,
+    "routeLabels": true,
+    "routeNameLabels": true,
+    "pointMarkers": true,
+    "namedPointMarkersOnly": false,
+    "pointNames": true,
+    "fullPointNames": true,
+    "depths": true,
+    "mapFurniture": true,
+    "pointTable": false,
+    "namePlacement": "asPositioned"
+  }
+}

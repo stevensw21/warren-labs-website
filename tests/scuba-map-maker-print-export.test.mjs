@@ -8,6 +8,7 @@ import {
   buildUsedSymbolLegend,
   effectiveExportSettings,
   normalizeExportSettings,
+  resolveMapViewExportSettings,
 } from "../app/projects/scuba-map-maker/print-export.ts";
 
 test("defines clean-chart and full-survey presets without a persisted preset field", () => {
@@ -21,18 +22,148 @@ test("defines clean-chart and full-survey presets without a persisted preset fie
   assert.equal(FULL_DETAIL_EXPORT_SETTINGS.routeLabels, true);
   assert.equal("contours" in FULL_DETAIL_EXPORT_SETTINGS, false);
   assert.equal(FULL_DETAIL_EXPORT_SETTINGS.pointTable, true);
+  assert.equal(FULL_DETAIL_EXPORT_SETTINGS.namePlacement, "asPositioned");
+  assert.equal(CLEAN_CHART_EXPORT_SETTINGS.namePlacement, "asPositioned");
 });
 
-test("uses full detail for missing legacy settings and preserves saved values", () => {
+test("defaults missing or invalid name placement to the current map while preserving explicit legacy modes", () => {
   assert.deepEqual(normalizeExportSettings(), FULL_DETAIL_EXPORT_SETTINGS);
-  const saved = normalizeExportSettings({ reference: false, routes: false, routeLabels: true, namePlacement: "asPositioned" });
+  assert.equal(normalizeExportSettings({}).namePlacement, "asPositioned");
+  assert.equal(normalizeExportSettings({ namePlacement: "invalid" }).namePlacement, "asPositioned");
+  assert.equal(normalizeExportSettings({ namePlacement: "asPositioned" }).namePlacement, "asPositioned");
+  assert.equal(normalizeExportSettings({ namePlacement: "smartCallouts" }).namePlacement, "smartCallouts");
+
+  const saved = normalizeExportSettings({ reference: false, routes: false, routeLabels: true, namePlacement: "smartCallouts" });
   assert.equal(saved.reference, false);
   assert.equal(saved.routes, false);
   assert.equal(saved.routeLabels, true);
-  assert.equal(saved.namePlacement, "asPositioned");
+  assert.equal(saved.namePlacement, "smartCallouts");
   assert.equal(saved.pointTable, true);
   const legacy = normalizeExportSettings({ contours: true });
   assert.equal("contours" in legacy, false);
+});
+
+test("resolves Match current map from visible layers while retaining PDF-only guarantees", () => {
+  const layers = {
+    reference: false,
+    shoreline: true,
+    geographicFeatures: true,
+    geographicFeatureLabels: false,
+    floatingText: true,
+    routes: true,
+    routeLabels: false,
+    routeNameLabels: true,
+    pointNames: true,
+    names: false,
+    depths: true,
+    mapFurniture: false,
+  };
+
+  assert.deepEqual(resolveMapViewExportSettings(layers, false), {
+    reference: false,
+    shoreline: true,
+    geographicFeatures: true,
+    geographicFeatureLabels: false,
+    floatingText: true,
+    routes: true,
+    routeLabels: false,
+    routeNameLabels: true,
+    pointMarkers: true,
+    namedPointMarkersOnly: false,
+    pointNames: true,
+    fullPointNames: false,
+    depths: true,
+    mapFurniture: false,
+    pointTable: false,
+    namePlacement: "asPositioned",
+  });
+  assert.equal(resolveMapViewExportSettings(layers, true).pointTable, true);
+  assert.deepEqual(layers, {
+    reference: false,
+    shoreline: true,
+    geographicFeatures: true,
+    geographicFeatureLabels: false,
+    floatingText: true,
+    routes: true,
+    routeLabels: false,
+    routeNameLabels: true,
+    pointNames: true,
+    names: false,
+    depths: true,
+    mapFurniture: false,
+  });
+});
+
+test("preserves independently visible current-map labels without changing their source layer state", () => {
+  const layers = {
+    reference: true,
+    shoreline: true,
+    geographicFeatures: false,
+    geographicFeatureLabels: true,
+    floatingText: true,
+    routes: false,
+    routeLabels: true,
+    routeNameLabels: true,
+    pointNames: false,
+    names: true,
+    depths: false,
+    mapFurniture: true,
+  };
+
+  const resolved = resolveMapViewExportSettings(layers, true);
+  assert.equal(resolved.geographicFeatures, false);
+  assert.equal(resolved.geographicFeatureLabels, true);
+  assert.equal(resolved.routes, false);
+  assert.equal(resolved.routeLabels, true);
+  assert.equal(resolved.routeNameLabels, true);
+  assert.equal(resolved.pointMarkers, true);
+  assert.equal(resolved.pointNames, false);
+  assert.equal(resolved.fullPointNames, true);
+  assert.equal(resolved.pointTable, true);
+  assert.equal(resolved.namePlacement, "asPositioned");
+  assert.equal(layers.geographicFeatureLabels, true);
+  assert.equal(layers.routeLabels, true);
+  assert.equal(layers.routeNameLabels, true);
+});
+
+test("resolves every current-map layer combination without leaking optimized PDF choices", () => {
+  const layerKeys = [
+    "reference",
+    "shoreline",
+    "geographicFeatures",
+    "geographicFeatureLabels",
+    "floatingText",
+    "routes",
+    "routeLabels",
+    "routeNameLabels",
+    "pointNames",
+    "names",
+    "depths",
+    "mapFurniture",
+  ];
+
+  for (let mask = 0; mask < 2 ** layerKeys.length; mask += 1) {
+    const layers = Object.fromEntries(layerKeys.map((key, index) => [key, Boolean(mask & (1 << index))]));
+    for (const pointTable of [false, true]) {
+      const resolved = resolveMapViewExportSettings(layers, pointTable);
+      assert.equal(resolved.reference, layers.reference);
+      assert.equal(resolved.shoreline, layers.shoreline);
+      assert.equal(resolved.geographicFeatures, layers.geographicFeatures);
+      assert.equal(resolved.geographicFeatureLabels, layers.geographicFeatureLabels);
+      assert.equal(resolved.floatingText, layers.floatingText);
+      assert.equal(resolved.routes, layers.routes);
+      assert.equal(resolved.routeLabels, layers.routeLabels);
+      assert.equal(resolved.routeNameLabels, layers.routeNameLabels);
+      assert.equal(resolved.pointMarkers, true);
+      assert.equal(resolved.namedPointMarkersOnly, false);
+      assert.equal(resolved.pointNames, layers.pointNames);
+      assert.equal(resolved.fullPointNames, layers.names);
+      assert.equal(resolved.depths, layers.depths);
+      assert.equal(resolved.mapFurniture, layers.mapFurniture);
+      assert.equal(resolved.pointTable, pointTable);
+      assert.equal(resolved.namePlacement, "asPositioned");
+    }
+  }
 });
 
 test("suppresses dependent labels without erasing their saved preferences", () => {
