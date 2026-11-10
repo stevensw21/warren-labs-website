@@ -108,6 +108,13 @@ export default function Home() {
             );
           })}
         </div>
+        <aside aria-labelledby="support-title" style={{ marginTop: 32, padding: 28, border: "1px solid #bdded2", borderRadius: 8, background: "#eef8f3", display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 24 }}>
+          <div style={{ flex: "1 1 260px" }}>
+            <h3 id="support-title" style={{ fontSize: 24, letterSpacing: "-.04em" }}>Support Warren Labs</h3>
+            <p style={{ marginTop: 10, color: "#426057", fontSize: 15, lineHeight: 1.6 }}>Enjoying the tools? Leave a tip to support the work. Always optional, always appreciated.</p>
+          </div>
+          <a className="button button-primary" href="https://venmo.com/u/Steven-Warren-32" target="_blank" rel="noopener noreferrer" style={{ background: "#147354", borderColor: "#147354", flexShrink: 0 }}>Tip on Venmo <ArrowUpRight size={17} aria-hidden="true" /></a>
+        </aside>
       </section>
 
       <section className="articles-section" id="articles" aria-labelledby="articles-title">
