@@ -133,7 +133,11 @@ export default function Home() {
       <footer id="contact">
         <div className="footer-rule"><span /></div>
         <div className="footer-grid">
-          <div><h2>Warren Labs</h2><p>Building practical tools for science, engineering, diving, and AI.</p></div>
+          <div>
+            <h2>Warren Labs</h2>
+            <p>Building practical tools for science, engineering, diving, and AI.</p>
+            <p style={{ marginTop: 16 }}><a href="https://venmo.com/u/Steven-Warren-32" target="_blank" rel="noopener noreferrer" style={{ textDecoration: "underline", textUnderlineOffset: 3 }}>Tip on Venmo</a> <span>(optional)</span></p>
+          </div>
           <div className="footer-links"><a href="https://github.com/stevensw21" target="_blank" rel="noreferrer">GitHub</a><a href="#contact">LinkedIn</a><a href="mailto:hello@warren-labs.com">Email</a></div>
         </div>
         <p className="copyright">© 2026 Warren Labs</p>
