@@ -1,0 +1,11 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import * as engine from '../public/projects/quiet-wilds/engine.js';
+const fresh=()=>({elapsed:0,loud:0,won:false});
+test('reward clock is available',()=>assert.equal(typeof engine.advanceReward,'function'));
+test('goal requires the full quiet duration and latches only once',()=>{let s=fresh();for(let i=0;i<5;i++)s=engine.advanceReward(s,10,45,1,6);assert.equal(s.won,false);s=engine.advanceReward(s,10,45,1,6);assert.equal(s.won,true);assert.equal(s.elapsed,6);assert.deepEqual(engine.advanceReward(s,90,45,1,6),s)});
+test('short noises pause; sustained noise resets quiet streak',()=>{let s={...fresh(),elapsed:4};s=engine.advanceReward(s,90,45,1,6);assert.equal(s.elapsed,4);s=engine.advanceReward(s,90,45,1,6);assert.equal(s.elapsed,4);s=engine.advanceReward(s,90,45,.5,6);assert.equal(s.elapsed,0);assert.equal(s.won,false)});
+test('returning to quiet clears noisy grace',()=>{let s={...fresh(),elapsed:2,loud:2};s=engine.advanceReward(s,10,45,1,6);assert.equal(s.elapsed,3);assert.equal(s.loud,0)});
+test('borderline sound pauses progress and breaks sustained noise',()=>{let s={...fresh(),elapsed:2,loud:2};s=engine.advanceReward(s,44,45,1,6);assert.equal(s.elapsed,2);assert.equal(s.loud,0)});
+test('invalid goal or timing cannot award a reward',()=>{for(const goal of [NaN,Infinity,0,-1])assert.deepEqual(engine.advanceReward(fresh(),10,45,1,goal),fresh());for(const dt of [NaN,Infinity,-1])assert.deepEqual(engine.advanceReward(fresh(),10,45,dt,6),fresh())});
+test('large frame gaps do not earn offline time',()=>assert.equal(engine.advanceReward(fresh(),10,45,100,60).elapsed,1));

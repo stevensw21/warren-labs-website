@@ -6,3 +6,12 @@ export function advance(s,level,threshold,dt,pace){
  else n.loud=Math.max(0,n.loud-dt);
  return n;
 }
+
+// A separate, one-shot reward clock: brief noise pauses; sustained noise resets.
+export function advanceReward(state, level, threshold, dt, goal) {
+ if(state.won || !Number.isFinite(goal) || goal<=0 || !Number.isFinite(dt) || dt<=0) return {...state};
+ const next={...state};dt=Math.min(dt,1);
+ if(level>threshold){next.loud+=dt;if(next.loud>=2.5)next.elapsed=0;}
+ else {next.loud=0;if(level<threshold-4)next.elapsed=Math.min(goal,next.elapsed+dt);}
+ next.won=next.elapsed>=goal;return next;
+}
