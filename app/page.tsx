@@ -6,6 +6,7 @@ import {
   ArrowRight,
   ArrowUpRight,
   AudioLines,
+  BookOpen,
   Github,
   Leaf,
   Map,
@@ -17,6 +18,7 @@ import { useState } from "react";
 const navItems = ["Home", "Projects", "Tools", "Articles", "About", "Contact"];
 
 const projects = [
+  { title: "Crawler Campaign Sheet", description: "A mobile-friendly campaign companion with floor scores, XP, and starting resources. Your character stays saved on your device.", status: "Available now", icon: BookOpen, art: "topography", href: "/projects/crawler-campaign/", githubHref: "https://github.com/stevensw21/warren-labs-website/tree/main/public/projects/crawler-campaign" },
   { title: "Quiet Wilds", description: "A colorful classroom sound garden. Quiet moments welcome animal friends, with local-only microphone sensing and student-drawn creatures.", status: "Available now", icon: Leaf, art: "topography", href: "/projects/quiet-wilds/", githubHref: "https://github.com/stevensw21/warren-labs-website/tree/main/public/projects/quiet-wilds" },
   { title: "Scuba Map Maker", description: "A working surface for documenting dive sites, underwater features, and field observations.", status: "Available now", icon: Map, art: "topography", href: "/projects/scuba-map-maker", githubHref: "https://github.com/stevensw21/warren-labs-website/tree/main/app/projects/scuba-map-maker" },
   { title: "Siren’s Soundscape", description: "A private GM soundboard for layering YouTube playlists, ambient audio, and one-shot effects during tabletop sessions.", status: "Available now", icon: AudioLines, art: "soundscape", href: "https://soundscape.warren-labs.com", githubHref: "https://github.com/stevensw21/warren-labs-website/tree/main/apps/sirens-soundscape" },
